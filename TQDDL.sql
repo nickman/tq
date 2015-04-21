@@ -214,7 +214,8 @@ GRANT SELECT ON V_$TRANSACTION TO TQREACTOR;
 
   CREATE TABLE TQSTUBS  (
     TQROWID          ROWID NOT NULL, 
-    TXID             RAW(8) NOT NULL,
+    TQUEUE_ID        INT NOT NULL,
+    XID              RAW(8) NOT NULL,
     SECURITY_ID      NUMBER(*,0) NOT NULL, 
     SECURITY_TYPE    CHAR(1 BYTE) NOT NULL, 
     ACCOUNT_ID       NUMBER(*,0) NOT NULL
@@ -392,11 +393,34 @@ CREATE OR REPLACE TYPE TQSTUB FORCE AS OBJECT (
 );
 /
 
+CREATE OR REPLACE TYPE TQSTUB_ARR FORCE AS TABLE OF TQSTUB;
+/
+
+CREATE OR REPLACE TYPE SEC_DECODE IS OBJECT (
+    SECURITY_DISPLAY_NAME   VARCHAR2(64),
+    SECURITY_TYPE           CHAR(1),
+    SECURITY_ID             NUMBER
+  );
+/
+
+create or replace TYPE SEC_DECODE_ARR IS  TABLE OF SEC_DECODE;
+/
+
+create or replace TYPE ACCT_DECODE IS OBJECT (
+    ACCOUNT_DISPLAY_NAME   	VARCHAR2(64),
+    ACCOUNT_ID             NUMBER
+);
+/
+
+create or replace TYPE ACCT_DECODE_ARR IS  TABLE OF ACCT_DECODE;
+/
+
+
 --------------------------------------------------------
 --  DDL for View TQUSTUBOV
 --------------------------------------------------------
 
-  CREATE OR REPLACE VIEW TQUSTUBOV OF TQTSTUB
+  CREATE OR REPLACE VIEW TQUSTUBOV OF TQSTUB
   WITH OBJECT IDENTIFIER (TQROWID) AS SELECT
   ROWIDTOCHAR(ROWID) XROWID, 
   ROWIDTOCHAR(TQROWID) TQROWID, 
@@ -438,7 +462,7 @@ create or replace PACKAGE TQV AS
       SECURITY_ID     TQUSTUBOV.SECURITY_ID%TYPE,
       SECURITY_TYPE   TQUSTUBOV.SECURITY_TYPE%TYPE,
       ACCOUNT_ID      TQUSTUBOV.ACCOUNT_ID%TYPE
-  )
+  );
   
   TYPE QROWIDS IS TABLE OF VARCHAR2(18);
   
@@ -474,46 +498,46 @@ create or replace PACKAGE TQV AS
   TYPE ACCT_DECODE_CACHE IS TABLE OF ACCOUNT.ACCOUNT_ID%TYPE INDEX BY ACCOUNT.ACCOUNT_DISPLAY_NAME%TYPE;
   accountCache ACCT_DECODE_CACHE;
   securityCache SEC_DECODE_CACHE;
-  
-  FUNCTION FINDRAWTQS(p IN TQSTUBCUR, MAX_ROWS IN NUMBER DEFAULT 100) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID));
-  
-  FUNCTION ENRICHACCOUNT(p IN TQSTUBCUR) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID));
-  
-  FUNCTION ENRICHSECURITY(p IN TQSTUBCUR) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID));
-  
-  FUNCTION TOTQSTUB(p IN TQSTUBCUR) RETURN TQSTUB_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID));
-  
-  FUNCTION TRADEBATCH(STUBS IN TQSTUB_ARR, MAX_BATCH_SIZE IN PLS_INTEGER DEFAULT 100) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE;
-  
-  FUNCTION TRADESTOVARCHAR(STUBS IN TQSTUB_ARR) RETURN VARCHAR2;
 
-  PROCEDURE DEBUGME(MAX_ROWS IN INT DEFAULT 1000, MAX_BATCH_SIZE IN INT DEFAULT 10);
+  -- =============================================================================
+  --    TQSTUB Operations
+  -- =============================================================================  
   
-  FUNCTION LOADBATCHES(MAX_ROWS IN INT DEFAULT 1000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCHMLOAD;
+  -- Finds unprocessed stubs
+  FUNCTION FINDSTUBS(p IN TQSTUBCUR, MAX_ROWS IN NUMBER DEFAULT 100) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID));
+  -- Pipeline transform from a stub record (TQSTUBV) to a stub (TQSTUB)
+  FUNCTION TOTQSTUB(p IN TQSTUBCUR) RETURN TQSTUB_ARR PIPELINED PARALLEL_ENABLE (PARTITION p BY RANGE(TQUEUE_ID));
   
-  FUNCTION QUERYBATCHES(MAX_ROWS IN INT DEFAULT 1000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCHMLOAD_ARR PIPELINED;
-  
+  -- =======================================RAD======================================
+  --    TQBATCH Operations
+  -- =============================================================================  
+
+  -- Groups a pipelined stream of TQSTUBs into TQBATCHes
+  FUNCTION TRADEBATCH(STUBS IN TQSTUB_ARR, MAX_BATCH_SIZE IN PLS_INTEGER DEFAULT 100) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE;
+  -- Starts a pipelined query to find TQSTUBs to process
   FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED;
-  
-  FUNCTION STREAMEVENTS(MAX_EVENTS IN INT DEFAULT 20) RETURN EVENTM_ARR PIPELINED;
-  
+  -- Locks the trades in a batch  
   PROCEDURE LOCKBATCH(batch IN TQBATCH);
-  
+  -- Locks the trades in an array of batches
   PROCEDURE LOCKBATCHES(batches IN TQBATCH_ARR);
-  
+  -- Updates the trades in a batch  
   PROCEDURE UPDATEBATCH(batch IN TQBATCH);
-  
+  -- Updates the trades in an array of batches
   PROCEDURE UPDATEBATCHES(batches IN TQBATCH_ARR);
-  
+  -- The TQSTUB insert handler, fired when a new trade comes into scope in the TQUEUE table
   PROCEDURE HANDLE_INSERT(transaction_id RAW, ntfnds CQ_NOTIFICATION$_DESCRIPTOR);
-  
-  PROCEDURE TESTINSERT;
-  
+
+
+  -- =============================================================================
+  --    Misc and Utility Operations
+  -- ============================================================================= 
+  -- a toString for TQSTUBs in an array of TQSTUBs
+  FUNCTION STUBTOSTR(STUBS IN TQSTUB_ARR) RETURN VARCHAR2;
+  -- Autonomous TX Logger, super basic  
   PROCEDURE LOGEVENT(msg VARCHAR2, errc NUMBER default 0);
-  
+  -- Acquires the XID of the current transaction
   FUNCTION CURRENTXID RETURN RAW;
   
-  FUNCTION RANDACCT RETURN VARCHAR2;
 
 END TQV;
 /
@@ -528,96 +552,11 @@ create or replace PACKAGE BODY TQV AS
   TYPE INT_ARR IS TABLE OF INT;
   TYPE CHAR_ARR IS TABLE OF CHAR;
   TYPE ROWID_ARR IS TABLE OF ROWID;
-  
-  
-  -- *******************************************************
-  --    Autonomous TX Logger
-  -- *******************************************************  
-  
-  PROCEDURE LOGEVENT(msg VARCHAR2, errc NUMBER default 0) IS
-    PRAGMA AUTONOMOUS_TRANSACTION;
-  BEGIN
-    INSERT INTO EVENT VALUES (SYSDATE, '' || errc || ' -- ' || msg);
-    COMMIT;
-  END LOGEVENT;
 
   -- *******************************************************
-  --    Event Listener
+  --    Root of Pipeline, Finds the unprocessed stubs
   -- *******************************************************  
-  
-  FUNCTION STREAMEVENTS(MAX_EVENTS IN INT DEFAULT 20) RETURN EVENTM_ARR PIPELINED IS
-    eventCount PLS_INTEGER := 0;
-    startTs DATE := SYSDATE;
-  BEGIN
-    WHILE(eventCount < MAX_EVENTS) LOOP
-      FOR e IN (SELECT TS, EVENT FROM EVENT WHERE TS >= startTs) LOOP
-        PIPE ROW('EVENT >> [' || e.EVENT || ']');
-        eventCount := eventCount + 1;
-        startTs := e.TS;
-      END LOOP;      
-      IF(eventCount < MAX_EVENTS) THEN
-        SYS.DBMS_LOCK.SLEEP(2);
-      END IF;
-    END LOOP;
-    RETURN;
-  END STREAMEVENTS;
-  
-
-  FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED IS
-      batchy TQBATCH;    
-      latency NUMBER  := 0;
-      cursor qx is SELECT VALUE(T) FROM TABLE (
-          TQV.TRADEBATCH(
-            TQV.TOTQSTUB(CURSOR(SELECT * FROM TABLE(
-              TQV.ENRICHSECURITY(CURSOR(SELECT * FROM TABLE(
-                TQV.ENRICHACCOUNT(CURSOR(SELECT * FROM TABLE(
-                  TQV.FINDRAWTQS (
-                    CURSOR (
-                      SELECT * FROM TQUEUEV
-                      WHERE TQUEUE_ID > STARTING_ID 
-                      AND STATUS_CODE IN ('PENDING')
-                      ORDER BY TQUEUE_ID, ACCOUNT_DISPLAY_NAME                  
-                    )
-                  , MAX_ROWS) -- MAX ROWS (Optional)                  
-                )))
-              )))
-            ) ORDER BY ACCOUNT_ID))
-          , MAX_BATCH_SIZE)  -- Max number of trades in a batch
-        ) T;
-    BEGIN
-      open qx;
-        LOOP
-          fetch qx into batchy;
-          EXIT WHEN qx%NOTFOUND;
-          pipe row(batchy);
-        END LOOP;
-      close qx;
-    NULL;
-  END QUERYTBATCHES;
-
-
-  PROCEDURE DEBUGME(MAX_ROWS IN INT DEFAULT 1000, MAX_BATCH_SIZE IN INT DEFAULT 10) AS
-    cnt int := 0;
-  BEGIN
-    NULL;
-  END DEBUGME;
-  
-  FUNCTION LOCKR(rid in VARCHAR2) RETURN BOOLEAN IS
-    PRAGMA AUTONOMOUS_TRANSACTION;
-    rrid VARCHAR2(18) := NULL;
-  BEGIN
-    SELECT ROWIDTOCHAR(ROWID) INTO rrid FROM TQUEUE WHERE ROWID = CHARTOROWID(rid) FOR UPDATE SKIP LOCKED;
-    COMMIT;
-    RETURN TRUE;
-    EXCEPTION WHEN NO_DATA_FOUND THEN
-      COMMIT;
-      RETURN FALSE;
-  END LOCKR;
-
-  -- *******************************************************
-  --    Root of Pipeline, Finds the raw trades
-  -- *******************************************************  
-  FUNCTION FINDRAWTQS(p IN TQSTUBCUR, MAX_ROWS IN NUMBER DEFAULT 100) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID)) IS    
+  FUNCTION FINDSTUBS(p IN TQSTUBCUR, MAX_ROWS IN NUMBER DEFAULT 100) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID)) IS    
     trade TQSTUBV;
     rid VARCHAR2(18);
   BEGIN
@@ -625,11 +564,9 @@ create or replace PACKAGE BODY TQV AS
       FETCH p INTO trade;      
       EXIT WHEN p%NOTFOUND;
       PIPE ROW(trade);
-      /*
-      IF LOCKR(trade.xrowid) THEN
+      IF LOCKSTUB(trade.xrowid) THEN
         PIPE ROW(trade);
       END IF;
-      */
       IF(p%ROWCOUNT=MAX_ROWS) THEN
         EXIT;
       END IF;
@@ -638,62 +575,11 @@ create or replace PACKAGE BODY TQV AS
     EXCEPTION
       WHEN NO_DATA_NEEDED THEN
         BEGIN
-          LOGEVENT('FINDRAWTQS >>> CLEAN UP');
+          LOGEVENT('FINDSTUBS >>> CLEAN UP');
         END;
         RETURN;
-  END FINDRAWTQS;
+  END FINDSTUBS;
   
-  -- *******************************************************
-  --    Enriches each trade with Account details
-  -- *******************************************************  
-  FUNCTION ENRICHACCOUNT(p IN TQSTUBCUR) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID)) IS    
-    trade TQSTUBV;    
-  BEGIN
-    LOOP    
-      FETCH p INTO trade;
-      EXIT WHEN p%NOTFOUND;
-      trade.ACCOUNT_ID := accountCache(trade.ACCOUNT_DISPLAY_NAME);
-/*
-      SELECT ACCOUNT_ID INTO trade.ACCOUNT_ID FROM ACCOUNT
-        WHERE ACCOUNT_DISPLAY_NAME = trade.ACCOUNT_DISPLAY_NAME;
-*/        
-      PIPE ROW(trade);
-    END LOOP;
-    RETURN;
-    EXCEPTION
-      WHEN NO_DATA_NEEDED THEN      
-        BEGIN
-          LOGEVENT('ENRICHACCOUNT >>> CLEAN UP');
-        END;
-        RETURN;
-  END ENRICHACCOUNT;
-  
-  -- *******************************************************
-  --    Enriches each trade with Specie details
-  -- *******************************************************  
-  FUNCTION ENRICHSECURITY(p IN TQSTUBCUR) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID)) IS
-    trade TQSTUBV;    
-  BEGIN
-    LOOP    
-      FETCH p INTO trade;
-      EXIT WHEN p%NOTFOUND;
-      trade.SECURITY_TYPE := securityCache(trade.SECURITY_DISPLAY_NAME).SECURITY_TYPE;
-      trade.SECURITY_ID := securityCache(trade.SECURITY_DISPLAY_NAME).SECURITY_ID;
-/*      
-      SELECT SECURITY_ID, SECURITY_TYPE INTO trade.SECURITY_ID, trade.SECURITY_TYPE FROM SECURITY
-        WHERE SECURITY_DISPLAY_NAME = trade.SECURITY_DISPLAY_NAME;
-*/        
-      PIPE ROW(trade);
-    END LOOP;
-    RETURN;
-    EXCEPTION
-      WHEN NO_DATA_NEEDED THEN      
-        BEGIN
-          LOGEVENT('ENRICHSECURITY >>> CLEAN UP');
-        END;
-        RETURN;
-  END ENRICHSECURITY;
-
   -- *******************************************************
   --    Converts Trade Record Sets into TQSTUB Object Arrays
   -- *******************************************************  
@@ -704,19 +590,14 @@ create or replace PACKAGE BODY TQV AS
       FETCH p INTO tv;
       EXIT WHEN p%NOTFOUND;
       PIPE ROW(TQSTUB(
-        tv.XROWID, 
-        tv.TQUEUE_ID, 
-        tv.XID,
-        tv.STATUS_CODE, 
-        tv.SECURITY_DISPLAY_NAME, 
-        tv.ACCOUNT_DISPLAY_NAME, 
-        tv.SECURITY_ID,         
-        tv.SECURITY_TYPE,
-        tv.ACCOUNT_ID,
-        tv.BATCH_ID,
-        tv.CREATE_TS, 
-        tv.UPDATE_TS, 
-        tv.ERROR_MESSAGE));
+      	tv.XROWID, 
+      	tv.TQROWID,
+      	tv.TQUEUE_ID,
+      	tv.XID,
+      	tv.SECURITY_ID,
+      	tv.SECURITY_TYPE,
+      	tv.ACCOUNT_ID
+    ));
     END LOOP;
     RETURN;
     EXCEPTION
@@ -726,20 +607,9 @@ create or replace PACKAGE BODY TQV AS
         END;
         RETURN;
   END TOTQSTUB;
-
 --
--- *******************************************************
---    Fetches the next batch id
--- *******************************************************  
-  FUNCTION NEXTBATCHID RETURN NUMBER IS 
-    seq NUMBER;
-  BEGIN
-    SELECT SEQ_TQBATCH_ID.NEXTVAL INTO seq FROM DUAL;
-    RETURN seq;
-  END NEXTBATCHID;
-
   -- *******************************************************
-  --    Sorts the trades in a batch by TQ ID
+  --    Sorts the TQSTUBs in a batch by TQ ID
   -- *******************************************************  
   PROCEDURE SORTTRADEARR(tqb IN OUT TQBATCH, STUBS IN TQSTUB_ARR) IS
     fTx INT := 0;
@@ -747,13 +617,8 @@ create or replace PACKAGE BODY TQV AS
     sortedStubs TQSTUB_ARR;    
     rowids XROWIDS;
   CURSOR tQByID IS 
-    SELECT TQSTUB(
-        XROWID, TQUEUE_ID, XID, STATUS_CODE, 
-        SECURITY_DISPLAY_NAME, ACCOUNT_DISPLAY_NAME, 
-        SECURITY_ID, SECURITY_TYPE, 
-        ACCOUNT_ID, BATCH_ID,
-        CREATE_TS, UPDATE_TS, ERROR_MESSAGE), XROWID
-      FROM TABLE(STUBS) ORDER BY TQUEUE_ID;            
+    SELECT VALUE(T), T.XROWID
+      FROM TABLE(STUBS) T ORDER BY T.TQUEUE_ID;            
       
    BEGIN
       IF (STUBS.COUNT = 0) THEN 
@@ -769,7 +634,7 @@ create or replace PACKAGE BODY TQV AS
       tqb.TRADES := sortedStubs;  
       tqb.ROWIDS := rowids;
     END IF;
-  END;
+  END;  
 --
 -- *******************************************************
 --    Preps a batch of trades for piping
@@ -781,7 +646,7 @@ create or replace PACKAGE BODY TQV AS
     SORTTRADEARR(batch, currentTradeArr);
     return batch;
   END PREPBATCH;
---  
+--
 -- *******************************************************
 --    Batches the current set of trades
 -- *******************************************************
@@ -813,10 +678,7 @@ create or replace PACKAGE BODY TQV AS
             currentPosAcctId := T.ACCOUNT_ID;        
           END IF;
           -- Now flush the single P trade
-          currentTradeArr.extend();
-          --currentTradeArr(1) := TQSTUB(T.XROWID, T.TQUEUE_ID, T.STATUS_CODE, T.SECURITY_DISPLAY_NAME, T.ACCOUNT_DISPLAY_NAME, T.SECURITY_ID, T.SECURITY_TYPE, T.ACCOUNT_ID, T.CREATE_TS, T.UPDATE_TS, T.ERROR_MESSAGE);
-          currentTradeArr(1) := T;
-          PIPE ROW (new TQBATCH(ACCOUNT => currentPosAcctId, TCOUNT => 1, FIRST_T => T.TQUEUE_ID, LAST_T => T.TQUEUE_ID, BATCH_ID => NEXTBATCHID, ROWIDS => NULL, TRADES => currentTradeArr));
+          PIPE ROW (new TQBATCH(ACCOUNT => currentPosAcctId, TCOUNT => 1, FIRST_T => T.TQUEUE_ID, LAST_T => T.TQUEUE_ID, BATCH_ID => NEXTBATCHID, ROWIDS => new XROWIDS(T.XROWID), TRADES => new TQSTUB_ARR(T)));
           tcount := 0;
           currentTradeArr := new TQSTUB_ARR();
           currentPosAcctId := T.ACCOUNT_ID;                  
@@ -833,81 +695,109 @@ create or replace PACKAGE BODY TQV AS
       tcount := tcount + 1;
       currentTradeArr.extend();
       currentTradeArr(tcount) := TQSTUB(
-        T.XROWID, 
-        T.TQUEUE_ID, 
-        T.XID,
-        T.STATUS_CODE, 
-        T.SECURITY_DISPLAY_NAME, 
-        T.ACCOUNT_DISPLAY_NAME, 
-        T.SECURITY_ID,         
-        T.SECURITY_TYPE, 
-        T.ACCOUNT_ID,
-        T.BATCH_ID,
-        T.CREATE_TS, 
-        T.UPDATE_TS, 
-        T.ERROR_MESSAGE);
+      	T.XROWID, 
+      	T.TQROWID,
+      	T.TQUEUE_ID,
+      	T.XID,
+      	T.SECURITY_ID,
+      	T.SECURITY_TYPE,
+      	T.ACCOUNT_ID
+	  );
     END LOOP;
     IF tcount > 0 THEN
         PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
     END IF;
   END TRADEBATCH;
-  
+--
   -- *******************************************************
   --    toString for Trade Arrays
   -- *******************************************************
 
-  FUNCTION TRADESTOVARCHAR(STUBS IN TQSTUB_ARR) RETURN VARCHAR2 IS
-    str VARCHAR(2000) := '';
+  FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED IS
+      batchy TQBATCH;    
+      latency NUMBER  := 0;
+      cursor qx is SELECT VALUE(T) FROM TABLE (
+          TQV.TRADEBATCH(
+            TQV.TOTQSTUB(CURSOR(SELECT * FROM TABLE(
+	          TQV.FINDRAWTQS (
+	            CURSOR (
+	              SELECT * FROM TQSTUBS
+	              WHERE TQUEUE_ID > STARTING_ID 
+	              ORDER BY TQUEUE_ID, ACCOUNT_ID                  
+	            )
+	          , MAX_ROWS) -- MAX ROWS (Optional)                  
+            ) ORDER BY ACCOUNT_ID))
+          , MAX_BATCH_SIZE)  -- Max number of trades in a batch
+        ) T;
+    BEGIN
+      open qx;
+        LOOP
+          fetch qx into batchy;
+          EXIT WHEN qx%NOTFOUND;
+          pipe row(batchy);
+        END LOOP;
+      close qx;
+    NULL;
+  END QUERYTBATCHES;  
+--  
+  -- *******************************************************
+  --    toString for Trade Arrays
+  -- *******************************************************
+
+  FUNCTION STUBTOSTR(STUBS IN TQSTUB_ARR) RETURN VARCHAR2 IS
+    str VARCHAR(4000) := '';
     st TQSTUB;
   BEGIN
     FOR i in STUBS.FIRST..STUBS.LAST LOOP
       st := STUBS(i);
-      str := str || '[' || st.TQUEUE_ID || ',' || st.SECURITY_TYPE || ',' || st.SECURITY_ID || ',' || st.ACCOUNT_ID || ']';
+      str := str || '[id:' || st.TQUEUE_ID || ', type:' || st.SECURITY_TYPE || ',sec:' || st.SECURITY_ID || ',acct:' || st.ACCOUNT_ID || ']';
+      IF (LENGTH(str) > 3900) THEN
+      	str := (str || '...' || (STUBS.COUNT - i) || ' more...');
+      	EXIT;
+      END IF;
     END LOOP;
     return str;
-  END TRADESTOVARCHAR;  
-
+  END STUBTOSTR;  
+--    
   -- *******************************************************
-  --    Procedural MLOAD
+  --    Autonomous TX Logger
   -- *******************************************************  
-  FUNCTION LOADBATCHES(MAX_ROWS IN INT DEFAULT 1000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCHMLOAD IS
-    mlBatches TQBATCH_ARR;    
-    latency NUMBER  := 0;
-  BEGIN
-      SELECT TQBATCH(ACCOUNT, TCOUNT, FIRST_T, LAST_T, BATCH_ID, ROWIDS, TRADES)  
-      BULK COLLECT INTO mlBatches
-      FROM TABLE (   -- TQ.TRADESTOVARCHAR(T.TRADES) 
-        TQV.TRADEBATCH(
-          TQV.TOTQSTUB(CURSOR(SELECT * FROM TABLE(
-            TQV.ENRICHSECURITY(CURSOR(SELECT * FROM TABLE(
-              TQV.ENRICHACCOUNT(CURSOR(SELECT * FROM TABLE(
-                TQV.FINDRAWTQS (
-                  CURSOR (
-                    SELECT * FROM TQUEUEO
-                    WHERE TQUEUE_ID >= 0 
-                    AND STATUS_CODE IN ('PENDING','ENRICH','RETRY')
-                    ORDER BY TQUEUE_ID, ACCOUNT_DISPLAY_NAME
-                  ), MAX_ROWS  -- MAX ROWS (Optional)
-                )
-              )))
-            )))
-          ) ORDER BY ACCOUNT_ID))
-        , MAX_BATCH_SIZE)  -- Max number of trades in a batch
-      ) T
-      ORDER BY FIRST_T;      
-     RETURN NEW TQBATCHMLOAD(mlBatches, mlBatches(1).FIRST_T, mlBatches(mlBatches.COUNT).LAST_T, latency);
-  END LOADBATCHES;
   
-  -- *******************************************************
-  --    Queryt MLOAD
-  -- *******************************************************  
-  FUNCTION QUERYBATCHES(MAX_ROWS IN INT DEFAULT 1000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCHMLOAD_ARR PIPELINED IS
-    mload TQBATCHMLOAD;
+  PROCEDURE LOGEVENT(msg VARCHAR2, errc NUMBER default 0) IS
+    PRAGMA AUTONOMOUS_TRANSACTION;
   BEGIN
-    mload := LOADBATCHES(MAX_ROWS, MAX_BATCH_SIZE);
-    PIPE ROW (mload);
-    RETURN;
-  END QUERYBATCHES;
+    INSERT INTO EVENT VALUES (SYSDATE, '' || errc || ' -- ' || msg);
+    COMMIT;
+  END LOGEVENT;
+--
+  -- *******************************************************
+  --    Attempts to lock the row in TQSTUBS
+  -- *******************************************************  
+
+  FUNCTION LOCKSTUB(rid in VARCHAR2) RETURN BOOLEAN IS
+    PRAGMA AUTONOMOUS_TRANSACTION;
+    rrid VARCHAR2(18) := NULL;
+  BEGIN
+    SELECT ROWIDTOCHAR(ROWID) INTO rrid FROM TQSTUBS WHERE ROWID = CHARTOROWID(rid) FOR UPDATE SKIP LOCKED;
+    COMMIT;
+    RETURN TRUE;
+    EXCEPTION WHEN NO_DATA_FOUND THEN
+      COMMIT;
+      RETURN FALSE;
+  END LOCKSTUB; 
+--
+-- *******************************************************
+--    Fetches the next batch id
+-- *******************************************************  
+  FUNCTION NEXTBATCHID RETURN NUMBER IS 
+    seq NUMBER;
+  BEGIN
+    SELECT SEQ_TQBATCH_ID.NEXTVAL INTO seq FROM DUAL;
+    RETURN seq;
+  END NEXTBATCHID;
+
+--
+
 --  
   -- *******************************************************
   --    Lock all rows in a batch
@@ -1353,8 +1243,6 @@ UNION ALL
 select 'TQSTUBS', count(*) from tqstubs
 UNION ALL
 select 'EVENTS', count(*) from event
-UNION ALL
-select 'TQXIDS', count(*) from TQXIDS
 
 
 
@@ -1408,3 +1296,40 @@ END;
 
 
 select * from tqxids
+
+
+/*
+
+select * FROM TABLE(NEW ACCT_DECODE_ARR(TQV.RANDOMACCT))
+select * FROM TABLE(NEW SEC_DECODE_ARR(TQV.RANDOMSEC))
+select count(*) from table(TQV.PIPEACCTCACHE)
+select * from table(TQV.PIPEACCTCACHE)
+select count(*) from table(TQV.PIPESECCACHE)
+select * from table(TQV.PIPESECCACHE)
+*/
+
+SELECT TQV.FORCELOADCACHE FROM DUAL
+
+
+BEGIN
+  EXECUTE IMMEDIATE 'truncate table TQUEUE';
+  EXECUTE IMMEDIATE 'truncate table EVENT';
+  EXECUTE IMMEDIATE 'truncate table TQSTUBS';
+  FOR i in 1..3 LOOP
+    TQV.GENTRADES;
+    COMMIT;
+  END LOOP;
+END;  
+
+select * from v$transaction
+select * from TQUEUE
+
+select 'TQUEUE', count(*) from tqueue
+UNION ALL
+select 'TQSTUBS', count(*) from tqstubs
+UNION ALL
+select 'EVENTS', count(*) from event
+
+select * from event order by ts desc
+
+
