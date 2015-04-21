@@ -15,7 +15,9 @@ create or replace PACKAGE BODY TQV AS
   TYPE SEC_DECODE_CACHE_IDX IS TABLE OF SEC_DECODE INDEX BY PLS_INTEGER;  
   TYPE ACCT_DECODE_CACHE_IDX IS TABLE OF ACCT_DECODE INDEX BY PLS_INTEGER;
   accountCacheIdx ACCT_DECODE_CACHE_IDX;
-  securityCacheIdx SEC_DECODE_CACHE_IDX;    
+  securityCacheIdx SEC_DECODE_CACHE_IDX; 
+  securityTypes CHAR_ARR := new CHAR_ARR('A', 'B', 'C', 'D', 'E', 'V', 'W', 'X', 'Y', 'Z', 'P');
+
   -- =====================================================================
   -- ==== done ====
   -- =====================================================================
@@ -30,15 +32,26 @@ create or replace PACKAGE BODY TQV AS
   --    To query directly: select * FROM TABLE(NEW SEC_DECODE_ARR(TQV.RANDOMSEC))
   -- *******************************************************  
   FUNCTION RANDOMSEC RETURN SEC_DECODE IS   
+    sz NUMBER := securityCacheIdx.COUNT-1;
+    rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
   BEGIN
-    RETURN securityCacheIdx(ABS(MOD(SYS.DBMS_RANDOM.RANDOM, securityCacheIdx.COUNT-1)));
+    IF rand = 0 THEN rand := 1; END IF;
+    return securityCacheIdx(rand);
+    EXCEPTION WHEN OTHERS THEN 
+      DECLARE
+        errm VARCHAR2(2000) := SQLERRM;
+        errc NUMBER := SQLCODE;        
+      BEGIN
+        LOGEVENT( errm || ' : Failed RANDOMSEC. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+        raise;
+      END;    
   END RANDOMSEC;
 --
   -- *******************************************************
   --    Returns a random account 
   --    To query directly: select * FROM TABLE(NEW ACCT_DECODE_ARR(TQV.RANDOMACCT))
   -- *******************************************************    
-  FUNCTION RANDOMACCT RETURN ACCT_DECODE IS 
+  FUNCTION RANDOMACCT RETURN ACCT_DECODE IS     
     sz NUMBER := accountCacheIdx.COUNT-1;
     rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
   BEGIN
@@ -54,14 +67,34 @@ create or replace PACKAGE BODY TQV AS
         raise;
       END;    
   END RANDOMACCT;
-  
+--
+  -- *******************************************************
+  --    Returns a random security type
+  -- *******************************************************    
+FUNCTION RANDOMSECTYPE RETURN CHAR IS   
+    sz NUMBER := securityTypes.COUNT;
+    rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
+  BEGIN
+    IF rand = 0 THEN rand := 1; END IF;
+    return securityTypes(rand);
+    EXCEPTION WHEN OTHERS THEN 
+      DECLARE
+        errm VARCHAR2(2000) := SQLERRM;
+        errc NUMBER := SQLCODE;
+        
+      BEGIN
+        LOGEVENT( errm || ' : Failed RANDOMSECTYPE. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+        raise;
+      END;    
+  END RANDOMSECTYPE;  
+--  
   FUNCTION PIPEACCTCACHE RETURN ACCT_DECODE_ARR PIPELINED IS 
   BEGIN
     FOR i in 1..accountCacheIdx.COUNT LOOP
       PIPE ROW(accountCacheIdx(i));
     END LOOP;
   END;
-  
+--  
   FUNCTION PIPESECCACHE RETURN SEC_DECODE_ARR PIPELINED IS 
   BEGIN
     FOR i in 1..securityCacheIdx.COUNT LOOP
@@ -87,6 +120,31 @@ create or replace PACKAGE BODY TQV AS
     END LOOP;
     COMMIT;
   END GENTRADES;
+--
+  -- *******************************************************
+  --    Generates the specified number of randomized accounts
+  --    and inserts them into ACCOUNT
+  -- *******************************************************      
+  PROCEDURE GENACCTS(acctCount IN NUMBER DEFAULT 1000) IS
+  BEGIN
+    FOR i in 1..acctCount LOOP
+      INSERT INTO ACCOUNT VALUES(SEQ_ACCOUNT_ID.NEXTVAL, SYS_GUID());
+    END LOOP;
+    COMMIT;
+  END GENACCTS;
+--
+  -- *******************************************************
+  --    Generates the specified number of randomized securities
+  --    and inserts them into SECURITY
+  -- *******************************************************      
+  PROCEDURE GENSECS(secCount IN NUMBER DEFAULT 10000) IS
+  BEGIN
+    FOR i in 1..secCount LOOP
+      INSERT INTO SECURITY VALUES(SEQ_SECURITY_ID.NEXTVAL, SYS_GUID(), TQV.RANDOMSECTYPE);
+    END LOOP;
+    COMMIT;
+  END GENSECS;
+  
   -- =====================================================================
   -- ==== done ====
   -- =====================================================================
@@ -102,11 +160,13 @@ create or replace PACKAGE BODY TQV AS
   BEGIN
     LOOP    
       FETCH p INTO trade;      
-      EXIT WHEN p%NOTFOUND;
+      EXIT WHEN p%NOTFOUND;      
       PIPE ROW(trade);
+      /*
       IF LOCKSTUB(trade.xrowid) THEN
         PIPE ROW(trade);
       END IF;
+      */
       IF(p%ROWCOUNT=MAX_ROWS) THEN
         EXIT;
       END IF;
@@ -130,13 +190,15 @@ create or replace PACKAGE BODY TQV AS
       FETCH p INTO tv;
       EXIT WHEN p%NOTFOUND;
       PIPE ROW(TQSTUB(
-      	tv.XROWID, 
-      	tv.TQROWID,
-      	tv.TQUEUE_ID,
-      	tv.XID,
-      	tv.SECURITY_ID,
-      	tv.SECURITY_TYPE,
-      	tv.ACCOUNT_ID
+        tv.XROWID, 
+        tv.TQROWID,
+        tv.TQUEUE_ID,
+        tv.XID,
+        tv.SECURITY_ID,
+        tv.SECURITY_TYPE,
+        tv.ACCOUNT_ID,
+        tv.BATCH_ID,
+        tv.BATCH_TS
     ));
     END LOOP;
     RETURN;
@@ -245,14 +307,16 @@ create or replace PACKAGE BODY TQV AS
       tcount := tcount + 1;
       currentTradeArr.extend();
       currentTradeArr(tcount) := TQSTUB(
-      	T.XROWID, 
-      	T.TQROWID,
-      	T.TQUEUE_ID,
-      	T.XID,
-      	T.SECURITY_ID,
-      	T.SECURITY_TYPE,
-      	T.ACCOUNT_ID
-	  );
+        T.XROWID, 
+        T.TQROWID,
+        T.TQUEUE_ID,
+        T.XID,
+        T.SECURITY_ID,
+        T.SECURITY_TYPE,
+        T.ACCOUNT_ID,
+        T.BATCH_ID,
+        T.BATCH_TS
+    );
     END LOOP;
     IF tcount > 0 THEN
         PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
@@ -260,7 +324,9 @@ create or replace PACKAGE BODY TQV AS
   END TRADEBATCH;
 --
   -- *******************************************************
-  --    toString for Trade Arrays
+  --    Main query point to get new batches
+  --    To keep and process the batches, 
+  --    call LOCKBATCH(batch) or LOCKBATCHES(batch_arr)
   -- *******************************************************
 
   FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED IS
@@ -269,13 +335,15 @@ create or replace PACKAGE BODY TQV AS
       cursor qx is SELECT VALUE(T) FROM TABLE (
           TQV.TRADEBATCH(
             TQV.TOTQSTUB(CURSOR(SELECT * FROM TABLE(
-	          TQV.FINDSTUBS(
-	            CURSOR (
-	              SELECT * FROM TQSTUBS
-	              WHERE TQUEUE_ID > STARTING_ID 
-	              ORDER BY TQUEUE_ID, ACCOUNT_ID                  
-	            )
-	          , MAX_ROWS) -- MAX ROWS (Optional)                  
+            TQV.FINDSTUBS(
+              CURSOR (
+                SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
+                WHERE TQUEUE_ID > STARTING_ID 
+                AND BATCH_ID < 1
+                AND BATCH_TS IS NULL
+                ORDER BY TQUEUE_ID, ACCOUNT_ID                  
+              )
+            , MAX_ROWS) -- MAX ROWS (Optional)                  
             ) ORDER BY ACCOUNT_ID))
           , MAX_BATCH_SIZE)  -- Max number of trades in a batch
         ) T;
@@ -289,6 +357,45 @@ create or replace PACKAGE BODY TQV AS
       close qx;
     NULL;
   END QUERYTBATCHES;  
+  
+  -- TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,TRADES ) 
+-- ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS 
+-- TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID
+
+  -- *******************************************************
+  --    Main query point to get existing batches
+  --    Basically reconstitutes batches from locked
+  --    stubs in TQSTUBS.
+  -- *******************************************************
+  FUNCTION GETBATCHES RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE IS
+    batch TQBATCH;
+    stubs TQSTUB_ARR;
+    CURSOR c1 IS SELECT ACCOUNT_ID, BATCH_ID, BATCH_TS, COUNT(*) TCOUNT, MIN(TQUEUE_ID) FIRST_T, MAX(TQUEUE_ID) LAST_T,
+    CAST(collect(ROWIDTOCHAR(ROWID)) AS XROWIDS) AS ROWIDS,
+    CAST(collect(ROWIDTOCHAR(TQROWID)) AS XROWIDS) AS TQROWIDS,
+    CAST(collect(TQSTUB(ROWIDTOCHAR(ROWID), TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,BATCH_TS)) AS TQSTUB_ARR) AS TQSTBS
+    FROM TQSTUBS 
+    WHERE BATCH_ID > 0
+    AND BATCH_TS IS NOT NULL
+    GROUP BY BATCH_ID, BATCH_TS, ACCOUNT_ID
+    ORDER BY BATCH_ID, BATCH_TS, ACCOUNT_ID;
+  BEGIN
+    FOR T IN c1 LOOP
+      PIPE ROW (new TQBATCH(T.ACCOUNT_ID, T.TCOUNT, T.FIRST_T, T.LAST_T, T.BATCH_ID, T.ROWIDS, T.TQSTBS));
+    END LOOP;
+    RETURN;
+  END GETBATCHES;
+  
+  /*
+  ACCOUNT           INT,
+  TCOUNT            INT,
+  FIRST_T           INT,
+  LAST_T            INT,
+  BATCH_ID          INT,
+  ROWIDS            XROWIDS,
+  TRADES            TQSTUB_ARR,
+  */
+
 --  
   -- *******************************************************
   --    toString for Trade Arrays
@@ -299,11 +406,11 @@ create or replace PACKAGE BODY TQV AS
     st TQSTUB;
   BEGIN
     FOR i in STUBS.FIRST..STUBS.LAST LOOP
-      st := STUBS(i);
-      str := str || '[id:' || st.TQUEUE_ID || ', type:' || st.SECURITY_TYPE || ',sec:' || st.SECURITY_ID || ',acct:' || st.ACCOUNT_ID || ']';
+      st := STUBS(i);      
+      str := str || '[id:' || st.TQUEUE_ID || ', batch:' || st.batch_id || ', type:' || st.SECURITY_TYPE || ',sec:' || st.SECURITY_ID || ',acct:' || st.ACCOUNT_ID || ']';
       IF (LENGTH(str) > 3900) THEN
-      	str := (str || '...' || (STUBS.COUNT - i) || ' more...');
-      	EXIT;
+        str := (str || '...' || (STUBS.COUNT - i) || ' more...');
+        EXIT;
       END IF;
     END LOOP;
     return str;
@@ -313,10 +420,10 @@ create or replace PACKAGE BODY TQV AS
   --    Autonomous TX Logger
   -- *******************************************************  
   
-  PROCEDURE LOGEVENT(msg VARCHAR2, errc NUMBER default 0) IS
+  PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0) IS
     PRAGMA AUTONOMOUS_TRANSACTION;
   BEGIN
-    INSERT INTO EVENT VALUES (SYSDATE, '' || errc || ' -- ' || msg);
+    INSERT INTO EVENT(EVENT_ID, ERRC, TS, EVENT) VALUES (SEQ_EVENT_ID.NEXTVAL, ABS(errcode), SYSDATE, msg);
     COMMIT;
   END LOGEVENT;
 --
@@ -340,13 +447,32 @@ create or replace PACKAGE BODY TQV AS
   --    Lock all rows in a batch
   -- *******************************************************
 
-  PROCEDURE LOCKBATCH(batch IN TQBATCH) IS
-    ids TQUEUE_ID_ARR;
+  PROCEDURE LOCKBATCH(batch IN OUT TQBATCH) IS
+    lockedStubs TQSTUB_ARR;
+    now TIMESTAMP := SYSTIMESTAMP;
+
   BEGIN
-    SELECT TQUEUE_ID BULK COLLECT INTO ids FROM TQUEUE
+    SELECT TQSTUB(
+        ROWIDTOCHAR(ROWID),
+        TQROWID,
+        TQUEUE_ID,
+        XID,
+        SECURITY_ID,
+        SECURITY_TYPE,
+        ACCOUNT_ID,
+        BATCH_ID,
+        BATCH_TS
+    ) BULK COLLECT INTO lockedStubs
+    FROM TQSTUBS 
     WHERE ROWID IN (
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
-    ) FOR UPDATE NOWAIT;
+    ) FOR UPDATE OF BATCH_ID, BATCH_TS SKIP LOCKED;
+
+    FORALL i in 1..lockedStubs.COUNT
+        UPDATE TQSTUBS SET BATCH_ID = batch.BATCH_ID, BATCH_TS = now
+        WHERE ROWID = CHARTOROWID(lockedStubs(i).XROWID);
+    COMMIT;
+    batch.TRADES := lockedStubs;
   END LOCKBATCH;
 --
   -- *******************************************************
@@ -354,9 +480,11 @@ create or replace PACKAGE BODY TQV AS
   -- *******************************************************
 
   PROCEDURE LOCKBATCHES(batches IN TQBATCH_ARR) IS
+    batch TQBATCH;
   BEGIN
     FOR i in 1..batches.COUNT LOOP   /**  !! FORALL with EXECUTE IMMEDIATE ?  */
-      LOCKBATCH(batches(i));
+      batch := batches(i);
+      LOCKBATCH(batch);
     END LOOP;
   END LOCKBATCHES;
 --
@@ -424,17 +552,6 @@ create or replace PACKAGE BODY TQV AS
     return accountCache(dispName);
   END;
     
-  PROCEDURE TESTINSERT AS
-  
-  BEGIN
-    INSERT INTO TQUEUE VALUES(SEQ_TQUEUE_ID.NEXTVAL, CURRENTXID, 'PENDING', 'c064e4ae-cb1c-4700-872f-eedde770c937',
-      '3c7dea15-cc46-4e9f-816a-f342c8089d86', NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
-      COMMIT;
-    
-    -- TQUEUE_ID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID
-    -- CREATE_TS,UPDATE_TS,ERROR_MESSAGE
-    
-  END;
 
 --
   -- *******************************************************
@@ -446,7 +563,8 @@ create or replace PACKAGE BODY TQV AS
     actids INT_ARR := new INT_ARR();
     tqids INT_ARR := new INT_ARR();
     sectypes CHAR_ARR := new CHAR_ARR();
-    rowids ROWID_ARR := new ROWID_ARR();
+    rowids XROWIDS;
+    
     numrows NUMBER := 0;
     row_desc_array CQ_NOTIFICATION$_ROW_ARRAY;
     operation_type  NUMBER;
@@ -482,8 +600,32 @@ create or replace PACKAGE BODY TQV AS
       LOGEVENT('HandleInserts: FOUND NO ROWS'); 
       RETURN;
     END IF;
-    LOGEVENT('HandleInserts: FOUND ROWS:' || row_desc_array.COUNT); 
+    SELECT row_id BULK COLLECT INTO rowids FROM TABLE(row_desc_array);
+    --LOGEVENT('HandleInserts: FOUND ROWS:' || row_desc_array.COUNT); 
     
+    SELECT TQSTUB(NULL, ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, transaction_id, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, -1 , NULL )
+    BULK COLLECT INTO stubs
+    FROM TQUEUE T, ACCOUNT A, SECURITY S
+    WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
+    AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
+    AND T.ROWID IN (
+      (SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rowids)) 
+    );
+    
+    FORALL i in stubs.FIRST..stubs.LAST
+      INSERT INTO TQSTUBS (TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS)
+      VALUES(
+        stubs(i).TQROWID, 
+        stubs(i).TQUEUE_ID,
+        stubs(i).XID, 
+        stubs(i).SECURITY_ID,
+        stubs(i).SECURITY_TYPE,
+        stubs(i).ACCOUNT_ID,
+        stubs(i).BATCH_ID,
+        stubs(i).BATCH_TS
+      );      
+    
+    /*
     secids.extend(row_desc_array.COUNT);
     actids.extend(row_desc_array.COUNT);
     tqids.extend(row_desc_array.COUNT);
@@ -496,17 +638,19 @@ create or replace PACKAGE BODY TQV AS
       secids(i) := SECIDFORROWID(rowids(i));
       actids(i) := ACCTIDFORROWID(rowids(i));
       sectypes(i) := SECTYPEFORROWID(rowids(i));
-      -- "-1400 -- ORA-01400: cannot insert NULL into ("TQREACTOR"."TQSTUBS"."TQUEUE_ID") : ORA-06512: at "TQREACTOR.TQV", line 477"
-      INSERT INTO TQSTUBS (TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID)
+      INSERT INTO TQSTUBS (TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS)
       VALUES(
         rowids(i), 
         tqids(i),
         transaction_id, 
         secids(i),
         sectypes(i),
-        actids(i)
+        actids(i),
+        -1,
+        NULL
       );      
     END LOOP;
+    */
     COMMIT;
     --LOGEVENT('HANDLED INSERT EVENTS: '|| numrows); 
     EXCEPTION WHEN OTHERS THEN 
@@ -612,3 +756,4 @@ create or replace PACKAGE BODY TQV AS
   BEGIN
     LOADCACHES;
 END TQV;
+/
