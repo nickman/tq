@@ -1,21 +1,23 @@
 create or replace PACKAGE BODY TQV AS
   -- *******************************************************
   --    Private global variables
-  -- *******************************************************  
+  -- *******************************************************
 
-  batchSeq PLS_INTEGER := 0;  
+  batchSeq PLS_INTEGER := 0;
+  /*
   TYPE INT_ARR IS TABLE OF INT;
   TYPE CHAR_ARR IS TABLE OF CHAR;
   TYPE ROWID_ARR IS TABLE OF ROWID;
-  TYPE SEC_DECODE_CACHE IS TABLE OF SPEC_DECODE INDEX BY SECURITY.SECURITY_DISPLAY_NAME%TYPE;  
+  TYPE SEC_DECODE_CACHE IS TABLE OF SPEC_DECODE INDEX BY SECURITY.SECURITY_DISPLAY_NAME%TYPE;
   TYPE ACCT_DECODE_CACHE IS TABLE OF ACCOUNT.ACCOUNT_ID%TYPE INDEX BY ACCOUNT.ACCOUNT_DISPLAY_NAME%TYPE;
+  */
   -- =====================================================================
   -- These are temp for testing
   -- =====================================================================
-  TYPE SEC_DECODE_CACHE_IDX IS TABLE OF SEC_DECODE INDEX BY PLS_INTEGER;  
+  TYPE SEC_DECODE_CACHE_IDX IS TABLE OF SEC_DECODE INDEX BY PLS_INTEGER;
   TYPE ACCT_DECODE_CACHE_IDX IS TABLE OF ACCT_DECODE INDEX BY PLS_INTEGER;
   accountCacheIdx ACCT_DECODE_CACHE_IDX;
-  securityCacheIdx SEC_DECODE_CACHE_IDX; 
+  securityCacheIdx SEC_DECODE_CACHE_IDX;
   securityTypes CHAR_ARR := new CHAR_ARR('A', 'B', 'C', 'D', 'E', 'V', 'W', 'X', 'Y', 'Z', 'P');
 
   -- =====================================================================
@@ -25,89 +27,89 @@ create or replace PACKAGE BODY TQV AS
   securityCache SEC_DECODE_CACHE;
   -- =====================================================================
   -- These are temp for testing
-  -- =====================================================================  
+  -- =====================================================================
 --
   -- *******************************************************
   --    Returns a random security
   --    To query directly: select * FROM TABLE(NEW SEC_DECODE_ARR(TQV.RANDOMSEC))
-  -- *******************************************************  
-  FUNCTION RANDOMSEC RETURN SEC_DECODE IS   
+  -- *******************************************************
+  FUNCTION RANDOMSEC RETURN SEC_DECODE IS
     sz NUMBER := securityCacheIdx.COUNT-1;
     rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
   BEGIN
     IF rand = 0 THEN rand := 1; END IF;
     return securityCacheIdx(rand);
-    EXCEPTION WHEN OTHERS THEN 
+    EXCEPTION WHEN OTHERS THEN
       DECLARE
         errm VARCHAR2(2000) := SQLERRM;
-        errc NUMBER := SQLCODE;        
+        errc NUMBER := SQLCODE;
       BEGIN
         LOGEVENT( errm || ' : Failed RANDOMSEC. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
         raise;
-      END;    
+      END;
   END RANDOMSEC;
 --
   -- *******************************************************
-  --    Returns a random account 
+  --    Returns a random account
   --    To query directly: select * FROM TABLE(NEW ACCT_DECODE_ARR(TQV.RANDOMACCT))
-  -- *******************************************************    
-  FUNCTION RANDOMACCT RETURN ACCT_DECODE IS     
+  -- *******************************************************
+  FUNCTION RANDOMACCT RETURN ACCT_DECODE IS
     sz NUMBER := accountCacheIdx.COUNT-1;
     rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
   BEGIN
     IF rand = 0 THEN rand := 1; END IF;
     return accountCacheIdx(rand);
-    EXCEPTION WHEN OTHERS THEN 
+    EXCEPTION WHEN OTHERS THEN
       DECLARE
         errm VARCHAR2(2000) := SQLERRM;
         errc NUMBER := SQLCODE;
-        
+
       BEGIN
         LOGEVENT( errm || ' : Failed RANDOMACCT. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
         raise;
-      END;    
+      END;
   END RANDOMACCT;
 --
   -- *******************************************************
   --    Returns a random security type
-  -- *******************************************************    
-FUNCTION RANDOMSECTYPE RETURN CHAR IS   
+  -- *******************************************************
+FUNCTION RANDOMSECTYPE RETURN CHAR IS
     sz NUMBER := securityTypes.COUNT;
     rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
   BEGIN
     IF rand = 0 THEN rand := 1; END IF;
     return securityTypes(rand);
-    EXCEPTION WHEN OTHERS THEN 
+    EXCEPTION WHEN OTHERS THEN
       DECLARE
         errm VARCHAR2(2000) := SQLERRM;
         errc NUMBER := SQLCODE;
-        
+
       BEGIN
         LOGEVENT( errm || ' : Failed RANDOMSECTYPE. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
         raise;
-      END;    
-  END RANDOMSECTYPE;  
---  
-  FUNCTION PIPEACCTCACHE RETURN ACCT_DECODE_ARR PIPELINED IS 
+      END;
+  END RANDOMSECTYPE;
+--
+  FUNCTION PIPEACCTCACHE RETURN ACCT_DECODE_ARR PIPELINED IS
   BEGIN
     FOR i in 1..accountCacheIdx.COUNT LOOP
       PIPE ROW(accountCacheIdx(i));
     END LOOP;
   END;
---  
-  FUNCTION PIPESECCACHE RETURN SEC_DECODE_ARR PIPELINED IS 
+--
+  FUNCTION PIPESECCACHE RETURN SEC_DECODE_ARR PIPELINED IS
   BEGIN
     FOR i in 1..securityCacheIdx.COUNT LOOP
       PIPE ROW(securityCacheIdx(i));
     END LOOP;
   END;
-  
-  
+
+
 --
   -- *******************************************************
   --    Generates the specified number of randomized trades
   --    and inserts them into TQUEUE
-  -- *******************************************************    
+  -- *******************************************************
   PROCEDURE GENTRADES(tradeCount IN NUMBER DEFAULT 1000) IS
     account ACCT_DECODE;
     security SEC_DECODE;
@@ -115,7 +117,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     FOR i in 1..tradeCount LOOP
       account := RANDOMACCT;
       security := RANDOMSEC;
-      INSERT INTO TQUEUE 
+      INSERT INTO TQUEUE
         VALUES(SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',  security.SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
     END LOOP;
     COMMIT;
@@ -124,7 +126,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   -- *******************************************************
   --    Generates the specified number of randomized accounts
   --    and inserts them into ACCOUNT
-  -- *******************************************************      
+  -- *******************************************************
   PROCEDURE GENACCTS(acctCount IN NUMBER DEFAULT 1000) IS
   BEGIN
     FOR i in 1..acctCount LOOP
@@ -136,7 +138,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   -- *******************************************************
   --    Generates the specified number of randomized securities
   --    and inserts them into SECURITY
-  -- *******************************************************      
+  -- *******************************************************
   PROCEDURE GENSECS(secCount IN NUMBER DEFAULT 10000) IS
   BEGIN
     FOR i in 1..secCount LOOP
@@ -144,29 +146,24 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     END LOOP;
     COMMIT;
   END GENSECS;
-  
+
   -- =====================================================================
   -- ==== done ====
   -- =====================================================================
-  
-  
+
+
 
   -- *******************************************************
   --    Root of Pipeline, Finds the unprocessed stubs
-  -- *******************************************************  
-  FUNCTION FINDSTUBS(p IN TQSTUBCUR, MAX_ROWS IN NUMBER DEFAULT 100) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID)) IS    
+  -- *******************************************************
+  FUNCTION FINDSTUBS(p IN TQSTUBCUR, MAX_ROWS IN NUMBER DEFAULT 100) RETURN TQSTUBV_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID)) IS
     trade TQSTUBV;
     rid VARCHAR2(18);
   BEGIN
-    LOOP    
-      FETCH p INTO trade;      
-      EXIT WHEN p%NOTFOUND;      
-      PIPE ROW(trade);
-      /*
-      IF LOCKSTUB(trade.xrowid) THEN
-        PIPE ROW(trade);
-      END IF;
-      */
+    LOOP
+      FETCH p INTO trade;
+      EXIT WHEN p%NOTFOUND;
+      PIPE ROW(trade);    
       IF(p%ROWCOUNT=MAX_ROWS) THEN
         EXIT;
       END IF;
@@ -179,18 +176,18 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
         END;
         RETURN;
   END FINDSTUBS;
-  
+
   -- *******************************************************
   --    Converts Trade Record Sets into TQSTUB Object Arrays
-  -- *******************************************************  
+  -- *******************************************************
   FUNCTION TOTQSTUB(p IN TQSTUBCUR) RETURN TQSTUB_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(TQUEUE_ID)) IS
-    tv TQSTUBV;    
+    tv TQSTUBV;
   BEGIN
-    LOOP    
+    LOOP
       FETCH p INTO tv;
       EXIT WHEN p%NOTFOUND;
       PIPE ROW(TQSTUB(
-        tv.XROWID, 
+        tv.XROWID,
         tv.TQROWID,
         tv.TQUEUE_ID,
         tv.XID,
@@ -203,7 +200,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     END LOOP;
     RETURN;
     EXCEPTION
-      WHEN NO_DATA_NEEDED THEN      
+      WHEN NO_DATA_NEEDED THEN
         BEGIN
           LOGEVENT('TOTQSTUB >>> CLEAN UP');
         END;
@@ -212,41 +209,41 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
 --
   -- *******************************************************
   --    Sorts the TQSTUBs in a batch by TQ ID
-  -- *******************************************************  
+  -- *******************************************************
   PROCEDURE SORTTRADEARR(tqb IN OUT TQBATCH, STUBS IN TQSTUB_ARR) IS
     fTx INT := 0;
     lTx INT := 0;
-    sortedStubs TQSTUB_ARR;    
+    sortedStubs TQSTUB_ARR;
     rowids XROWIDS;
-  CURSOR tQByID IS 
+  CURSOR tQByID IS
     SELECT VALUE(T), T.XROWID
-      FROM TABLE(STUBS) T ORDER BY T.TQUEUE_ID;            
-      
+      FROM TABLE(STUBS) T ORDER BY T.TQUEUE_ID;
+
    BEGIN
-      IF (STUBS.COUNT = 0) THEN 
+      IF (STUBS.COUNT = 0) THEN
       tqb.FIRST_T := -1;
-      tqb.LAST_T := -1;  
+      tqb.LAST_T := -1;
       tqb.TRADES := STUBS;
-    ELSE 
+    ELSE
       OPEN tQByID;
         FETCH tQByID BULK COLLECT INTO sortedStubs, rowids;
-      CLOSE tQByID;      
+      CLOSE tQByID;
       tqb.FIRST_T := sortedStubs(1).TQUEUE_ID;
       tqb.LAST_T := sortedStubs(STUBS.COUNT).TQUEUE_ID;
-      tqb.TRADES := sortedStubs;  
+      tqb.TRADES := sortedStubs;
       tqb.ROWIDS := rowids;
     END IF;
-  END;  
+  END;
 --
 -- *******************************************************
 --    Fetches the next batch id
--- *******************************************************  
-  FUNCTION NEXTBATCHID RETURN NUMBER IS 
+-- *******************************************************
+  FUNCTION NEXTBATCHID RETURN NUMBER IS
     seq NUMBER;
   BEGIN
     SELECT SEQ_TQBATCH_ID.NEXTVAL INTO seq FROM DUAL;
     RETURN seq;
-  END NEXTBATCHID;  
+  END NEXTBATCHID;
 --
 -- *******************************************************
 --    Preps a batch of trades for piping
@@ -262,52 +259,52 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
 -- *******************************************************
 --    Batches the current set of trades
 -- *******************************************************
-  
+
   FUNCTION TRADEBATCH(STUBS IN TQSTUB_ARR, MAX_BATCH_SIZE IN PLS_INTEGER DEFAULT 100) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE IS
     currentPosAcctId INT := -1;
     currentTradeArr TQSTUB_ARR := NULL;
     tcount INT := 0;
-    T TQSTUB;    
+    T TQSTUB;
   BEGIN
     IF STUBS.COUNT = 0 THEN
       RETURN;
     END IF;
     FOR i IN STUBS.FIRST..STUBS.LAST LOOP
       T := STUBS(i);
-      IF currentTradeArr IS NULL THEN 
-        currentTradeArr := new TQSTUB_ARR();        
-        currentPosAcctId := T.ACCOUNT_ID;        
+      IF currentTradeArr IS NULL THEN
+        currentTradeArr := new TQSTUB_ARR();
+        currentPosAcctId := T.ACCOUNT_ID;
       END IF;
       IF (T.ACCOUNT_ID != currentPosAcctId OR tcount = MAX_BATCH_SIZE OR T.SECURITY_TYPE='P') THEN
-        IF T.SECURITY_TYPE='P' THEN 
+        IF T.SECURITY_TYPE='P' THEN
           -- If we already batched some trades, flush them and reset state
-          IF tcount > 0 THEN  
+          IF tcount > 0 THEN
             PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
             batchSeq := batchSeq +1;
             -- LOGEVENT('Piped Batch #' || batchSeq);
             tcount := 0;
             currentTradeArr := new TQSTUB_ARR();
-            currentPosAcctId := T.ACCOUNT_ID;        
+            currentPosAcctId := T.ACCOUNT_ID;
           END IF;
           -- Now flush the single P trade
           PIPE ROW (new TQBATCH(ACCOUNT => currentPosAcctId, TCOUNT => 1, FIRST_T => T.TQUEUE_ID, LAST_T => T.TQUEUE_ID, BATCH_ID => NEXTBATCHID, ROWIDS => new XROWIDS(T.XROWID), TRADES => new TQSTUB_ARR(T)));
           tcount := 0;
           currentTradeArr := new TQSTUB_ARR();
-          currentPosAcctId := T.ACCOUNT_ID;                  
+          currentPosAcctId := T.ACCOUNT_ID;
           CONTINUE;
         ELSE
           IF tcount > 0  THEN
             PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
             tcount := 0;
             currentTradeArr := new TQSTUB_ARR();
-            currentPosAcctId := T.ACCOUNT_ID;        
+            currentPosAcctId := T.ACCOUNT_ID;
           END IF;
         END IF;
       END IF;
       tcount := tcount + 1;
       currentTradeArr.extend();
       currentTradeArr(tcount) := TQSTUB(
-        T.XROWID, 
+        T.XROWID,
         T.TQROWID,
         T.TQUEUE_ID,
         T.XID,
@@ -325,12 +322,12 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
 --
   -- *******************************************************
   --    Main query point to get new batches
-  --    To keep and process the batches, 
+  --    To keep and process the batches,
   --    call LOCKBATCH(batch) or LOCKBATCHES(batch_arr)
   -- *******************************************************
 
   FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED IS
-      batchy TQBATCH;    
+      batchy TQBATCH;
       latency NUMBER  := 0;
       cursor qx is SELECT VALUE(T) FROM TABLE (
           TQV.TRADEBATCH(
@@ -338,12 +335,12 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
             TQV.FINDSTUBS(
               CURSOR (
                 SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
-                WHERE TQUEUE_ID > STARTING_ID 
+                WHERE TQUEUE_ID > STARTING_ID
                 AND BATCH_ID < 1
                 AND BATCH_TS IS NULL
-                ORDER BY TQUEUE_ID, ACCOUNT_ID                  
+                ORDER BY TQUEUE_ID, ACCOUNT_ID
               )
-            , MAX_ROWS) -- MAX ROWS (Optional)                  
+            , MAX_ROWS) -- MAX ROWS (Optional)
             ) ORDER BY ACCOUNT_ID))
           , MAX_BATCH_SIZE)  -- Max number of trades in a batch
         ) T;
@@ -356,11 +353,8 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
         END LOOP;
       close qx;
     NULL;
-  END QUERYTBATCHES;  
-  
-  -- TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,TRADES ) 
--- ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS 
--- TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID
+  END QUERYTBATCHES;
+
 
   -- *******************************************************
   --    Main query point to get existing batches
@@ -374,7 +368,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     CAST(collect(ROWIDTOCHAR(ROWID)) AS XROWIDS) AS ROWIDS,
     CAST(collect(ROWIDTOCHAR(TQROWID)) AS XROWIDS) AS TQROWIDS,
     CAST(collect(TQSTUB(ROWIDTOCHAR(ROWID), TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,BATCH_TS)) AS TQSTUB_ARR) AS TQSTBS
-    FROM TQSTUBS 
+    FROM TQSTUBS
     WHERE BATCH_ID > 0
     AND BATCH_TS IS NOT NULL
     GROUP BY BATCH_ID, BATCH_TS, ACCOUNT_ID
@@ -385,18 +379,8 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     END LOOP;
     RETURN;
   END GETBATCHES;
-  
-  /*
-  ACCOUNT           INT,
-  TCOUNT            INT,
-  FIRST_T           INT,
-  LAST_T            INT,
-  BATCH_ID          INT,
-  ROWIDS            XROWIDS,
-  TRADES            TQSTUB_ARR,
-  */
 
---  
+--
   -- *******************************************************
   --    toString for Trade Arrays
   -- *******************************************************
@@ -406,7 +390,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     st TQSTUB;
   BEGIN
     FOR i in STUBS.FIRST..STUBS.LAST LOOP
-      st := STUBS(i);      
+      st := STUBS(i);
       str := str || '[id:' || st.TQUEUE_ID || ', batch:' || st.batch_id || ', type:' || st.SECURITY_TYPE || ',sec:' || st.SECURITY_ID || ',acct:' || st.ACCOUNT_ID || ']';
       IF (LENGTH(str) > 3900) THEN
         str := (str || '...' || (STUBS.COUNT - i) || ' more...');
@@ -414,12 +398,12 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       END IF;
     END LOOP;
     return str;
-  END STUBTOSTR;  
---    
+  END STUBTOSTR;
+--
   -- *******************************************************
   --    Autonomous TX Logger
-  -- *******************************************************  
-  
+  -- *******************************************************
+
   PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0) IS
     PRAGMA AUTONOMOUS_TRANSACTION;
   BEGIN
@@ -429,7 +413,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
 --
   -- *******************************************************
   --    Attempts to lock the row in TQSTUBS
-  -- *******************************************************  
+  -- *******************************************************
 
   FUNCTION LOCKSTUB(rid in VARCHAR2) RETURN BOOLEAN IS
     PRAGMA AUTONOMOUS_TRANSACTION;
@@ -441,8 +425,8 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     EXCEPTION WHEN NO_DATA_FOUND THEN
       COMMIT;
       RETURN FALSE;
-  END LOCKSTUB; 
---  
+  END LOCKSTUB;
+--
   -- *******************************************************
   --    Lock all rows in a batch
   -- *******************************************************
@@ -463,7 +447,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
         BATCH_ID,
         BATCH_TS
     ) BULK COLLECT INTO lockedStubs
-    FROM TQSTUBS 
+    FROM TQSTUBS
     WHERE ROWID IN (
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
     ) FOR UPDATE OF BATCH_ID, BATCH_TS SKIP LOCKED;
@@ -495,7 +479,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   PROCEDURE UPDATEBATCH(batch IN TQBATCH) IS
   BEGIN
     FORALL i IN 1..batch.TRADES.COUNT
-      UPDATE TQUEUE SET        
+      UPDATE TQUEUE SET
         STATUS_CODE = batch.TRADES(i).STATUS_CODE,
         SECURITY_DISPLAY_NAME = batch.TRADES(i).SECURITY_DISPLAY_NAME,
         ACCOUNT_DISPLAY_NAME = batch.TRADES(i).ACCOUNT_DISPLAY_NAME,
@@ -508,7 +492,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
         ERROR_MESSAGE = batch.TRADES(i).ERROR_MESSAGE
       WHERE ROWID = CHARTOROWID(batch.TRADES(i).XROWID);
       -- WHERE TQUEUE_ID = batch.TRADES(i).TQUEUE_ID;
-    
+
   END UPDATEBATCH;
   */
 --
@@ -521,42 +505,12 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     FORALL i IN 1..batches.COUNT
       EXECUTE IMMEDIATE 'BEGIN TQV.UPDATEBATCH(:1); END;' USING IN batches(i);
   END UPDATEBATCHES;
-*/  
-  
-  
-  FUNCTION SECIDFORROWID(id in ROWID) RETURN INT IS
-    dispName VARCHAR2(64);
-  BEGIN
-    SELECT SECURITY_DISPLAY_NAME INTO dispName FROM TQUEUE WHERE ROWID = id;
-    return securityCache(dispName).SECURITY_ID;
-  END;
-
-  FUNCTION SECTYPEFORROWID(id in ROWID) RETURN CHAR IS
-    dispName VARCHAR2(64);
-  BEGIN
-    SELECT SECURITY_DISPLAY_NAME INTO dispName FROM TQUEUE WHERE ROWID = id;
-    return securityCache(dispName).SECURITY_TYPE;
-  END;
-  
-  FUNCTION TQIDFORROWID(id in ROWID) RETURN NUMBER IS
-    tqid NUMBER;
-  BEGIN
-    SELECT TQUEUE_ID INTO tqid FROM TQUEUE WHERE ROWID = id;
-    RETURN tqid;
-  END TQIDFORROWID;
-
-  FUNCTION ACCTIDFORROWID(id in ROWID) RETURN INT IS
-    dispName VARCHAR2(64);
-  BEGIN
-    SELECT ACCOUNT_DISPLAY_NAME INTO dispName FROM TQUEUE WHERE ROWID = id;
-    return accountCache(dispName);
-  END;
-    
+*/
 
 --
   -- *******************************************************
   --    Handles INSERT Query notifications
-  -- *******************************************************  
+  -- *******************************************************
 --  FIXME:  this can be optimized !!
   PROCEDURE HANDLE_INSERT(transaction_id RAW, ntfnds CQ_NOTIFICATION$_DESCRIPTOR) IS
     secids INT_ARR := new INT_ARR();
@@ -564,7 +518,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     tqids INT_ARR := new INT_ARR();
     sectypes CHAR_ARR := new CHAR_ARR();
     rowids XROWIDS;
-    
+
     numrows NUMBER := 0;
     row_desc_array CQ_NOTIFICATION$_ROW_ARRAY;
     operation_type  NUMBER;
@@ -577,87 +531,60 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     ELSE
       operation_type := ntfnds.query_desc_array(1).table_desc_array(1).Opflags;
     END IF;
-    
+
     IF (bitand(operation_type, DBMS_CQ_NOTIFICATION.ALL_ROWS) = 0) THEN
       -- We have rows
       IF (event_type = DBMS_CQ_NOTIFICATION.EVENT_OBJCHANGE) THEN
-        LOGEVENT('HandleInserts: EVENT_OBJCHANGE'); 
+        LOGEVENT('HandleInserts: EVENT_OBJCHANGE');
         row_desc_array := ntfnds.table_desc_array(1).row_desc_array;
       ELSIF (event_type = DBMS_CQ_NOTIFICATION.EVENT_QUERYCHANGE) THEN
-        LOGEVENT('HandleInserts: EVENT_QUERYCHANGE'); 
+        LOGEVENT('HandleInserts: EVENT_QUERYCHANGE');
         row_desc_array := ntfnds.query_desc_array(1).table_desc_array(1).row_desc_array;
       ELSE
-        LOGEVENT('HandleInserts: Unsupported Event Type:' || event_type); 
+        LOGEVENT('HandleInserts: Unsupported Event Type:' || event_type);
       END IF;
-    ELSE 
+    ELSE
       -- batch was too big. Need to read from TQXIDS
-      LOGEVENT('HandleInserts: Batch Overflow on TX:' || ntfnds.transaction_id); 
+      LOGEVENT('HandleInserts: Batch Overflow on TX:' || ntfnds.transaction_id);
       SELECT SYS.CHNF$_RDESC(0, ROWID) BULK COLLECT INTO row_desc_array FROM TQUEUE WHERE XID = ntfnds.transaction_id;
-      LOGEVENT('HandleInserts: Retrieved Overflow:' || row_desc_array.COUNT); 
+      LOGEVENT('HandleInserts: Retrieved Overflow:' || row_desc_array.COUNT);
     END IF;
-  
+
     IF ( row_desc_array IS NULL ) THEN
-      LOGEVENT('HandleInserts: FOUND NO ROWS'); 
+      LOGEVENT('HandleInserts: FOUND NO ROWS');
       RETURN;
     END IF;
     SELECT row_id BULK COLLECT INTO rowids FROM TABLE(row_desc_array);
-    --LOGEVENT('HandleInserts: FOUND ROWS:' || row_desc_array.COUNT); 
-    
+    --LOGEVENT('HandleInserts: FOUND ROWS:' || row_desc_array.COUNT);
+
     SELECT TQSTUB(NULL, ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, transaction_id, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, -1 , NULL )
     BULK COLLECT INTO stubs
     FROM TQUEUE T, ACCOUNT A, SECURITY S
     WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
     AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
     AND T.ROWID IN (
-      (SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rowids)) 
+      (SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rowids))
     );
-    
+
     FORALL i in stubs.FIRST..stubs.LAST
       INSERT INTO TQSTUBS (TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS)
       VALUES(
-        stubs(i).TQROWID, 
+        stubs(i).TQROWID,
         stubs(i).TQUEUE_ID,
-        stubs(i).XID, 
+        stubs(i).XID,
         stubs(i).SECURITY_ID,
         stubs(i).SECURITY_TYPE,
         stubs(i).ACCOUNT_ID,
         stubs(i).BATCH_ID,
         stubs(i).BATCH_TS
-      );      
-    
-    /*
-    secids.extend(row_desc_array.COUNT);
-    actids.extend(row_desc_array.COUNT);
-    tqids.extend(row_desc_array.COUNT);
-    sectypes.extend(row_desc_array.COUNT);
-    rowids.extend(row_desc_array.COUNT);
-    
-    FOR i in 1..row_desc_array.COUNT LOOP
-      rowids(i) := CHARTOROWID(row_desc_array(i).row_id);
-      tqids(i) := TQIDFORROWID(row_desc_array(i).row_id);
-      secids(i) := SECIDFORROWID(rowids(i));
-      actids(i) := ACCTIDFORROWID(rowids(i));
-      sectypes(i) := SECTYPEFORROWID(rowids(i));
-      INSERT INTO TQSTUBS (TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS)
-      VALUES(
-        rowids(i), 
-        tqids(i),
-        transaction_id, 
-        secids(i),
-        sectypes(i),
-        actids(i),
-        -1,
-        NULL
-      );      
-    END LOOP;
-    */
-    COMMIT;
-    --LOGEVENT('HANDLED INSERT EVENTS: '|| numrows); 
-    EXCEPTION WHEN OTHERS THEN 
+      );
+        COMMIT;
+    --LOGEVENT('HANDLED INSERT EVENTS: '|| numrows);
+    EXCEPTION WHEN OTHERS THEN
       DECLARE
         errm VARCHAR2(2000) := SQLERRM;
         errc NUMBER := SQLCODE;
-        
+
       BEGIN
         LOGEVENT( errm || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
       END;
@@ -665,11 +592,99 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
 
 
 
-  
+  -- *******************************************************
+  --    Lock all rows in a batch.
+  --    Intended to re-lock a batch when trade processing starts
+  -- *******************************************************
+
+  PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH) IS
+    lockedStubs TQSTUB_ARR;
+    now TIMESTAMP := SYSTIMESTAMP;  
+  BEGIN
+    SELECT TQSTUB(
+        ROWIDTOCHAR(ROWID),
+        TQROWID,
+        TQUEUE_ID,
+        XID,
+        SECURITY_ID,
+        SECURITY_TYPE,
+        ACCOUNT_ID,
+        BATCH_ID,
+        BATCH_TS
+    ) BULK COLLECT INTO lockedStubs
+    FROM TQSTUBS 
+    WHERE ROWID IN (
+      SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
+    ) FOR UPDATE SKIP LOCKED;  
+    batch.TRADES := lockedStubs;
+  END RELOCKBATCH;
+    
+  -- *******************************************************
+  --    Locks, selects and returns all the trades for a batch
+  -- *******************************************************
+
+  FUNCTION STARTBATCH(tqbatch IN OUT TQBATCH) RETURN TQTRADE_ARR AS
+    trades TQTRADE_ARR;
+    rids XROWIDS := tqbatch.TXIDS;
+    -- BATCH_HAS_LOCKED_ROWS EXCEPTION;
+    -- PRAGMA EXCEPTION_INIT(BATCH_HAS_LOCKED_ROWS, -54);
+  BEGIN
+    SELECT TQTRADE(ROWIDTOCHAR(ROWID), TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE)
+    BULK COLLECT INTO trades
+    FROM TQUEUE T
+    WHERE ROWID IN (
+      SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rids)
+    )
+    FOR UPDATE SKIP LOCKED;
+    --tqbatch-->TRADES --> TQUEUE_ID
+    --TRADES.TQSTUB.TQUEUE_ID
+    RETURN trades;
+  END STARTBATCH;
+--  
+  -- *******************************************************
+  --    Updates all rows in TQUEUE from the passed trade array
+  -- *******************************************************
+
+  PROCEDURE SAVETRADES(trades IN TQTRADE_ARR) AS
+    tr TQTRADE_ARR := trades;
+  BEGIN
+    FORALL i IN 1..tr.COUNT
+      UPDATE TQUEUE SET
+        STATUS_CODE = tr(i).STATUS_CODE,
+        UPDATE_TS = tr(i).UPDATE_TS,
+        ERROR_MESSAGE = tr(i).ERROR_MESSAGE
+      WHERE ROWID = CHARTOROWID(tr(i).XROWID);  
+  END SAVETRADES;
+--  
+  -- *******************************************************
+  --    Deletes all the stubs for a batch by the passed rowids
+  -- *******************************************************
+
+  PROCEDURE FINISHBATCH(batchRowids IN XROWIDS) AS
+    rids XROWIDS := batchRowids;
+  BEGIN
+    DELETE FROM TQSTUBS WHERE ROWID IN (
+      SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rids)
+    );    
+  END FINISHBATCH;
+
+  PROCEDURE HANDLE_CHANGE(ntfnds IN CQ_NOTIFICATION$_DESCRIPTOR) AS
+  BEGIN
+    -- TODO: Implementation required for PROCEDURE TQV.HANDLE_CHANGE
+    NULL;
+  END HANDLE_CHANGE;
+
+  FUNCTION BVDECODE(code IN NUMBER) RETURN INT_ARR AS
+  BEGIN
+    -- TODO: Implementation required for FUNCTION TQV.BVDECODE
+    RETURN NULL;
+  END BVDECODE;
+
+
   -- *******************************************************
   --    Get current XID function
   -- *******************************************************
-  
+
   FUNCTION CURRENTXID RETURN RAW IS
     txid    VARCHAR2(50) := DBMS_TRANSACTION.local_transaction_id;
     idx     pls_integer;
@@ -683,7 +698,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     IF txid IS NULL THEN
         --  ALSO SEE dbms_transaction.step_id
       txid := DBMS_TRANSACTION.local_transaction_id(true);
-    END IF;    
+    END IF;
     pos1 := instr(txid, '.', 1, 1);
     pos2 := instr(txid, '.', pos1+1, 1);
     xid_usn := TO_NUMBER(substr(txid,1,pos1-1));
@@ -693,13 +708,13 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     SELECT XID INTO xid FROM V$TRANSACTION WHERE XIDUSN = xid_usn AND XIDSLOT = xid_slot AND XIDSQN = xid_sqn AND STATUS = 'ACTIVE';
     return xid;
   END CURRENTXID;
-  
+
 
 
   -- *******************************************************
   --    Load cache procedure
   -- *******************************************************
-  
+
   FUNCTION FORCELOADCACHE RETURN VARCHAR2 IS
     d VARCHAR2(64);
     s NUMBER := 0;
@@ -708,20 +723,20 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       FOR R IN (SELECT * FROM TABLE(TQV.PIPESECCACHE)) LOOP
         d := R.SECURITY_DISPLAY_NAME;
         s := s+1;
-      END LOOP;      
+      END LOOP;
       FOR R IN (SELECT * FROM TABLE(TQV.PIPEACCTCACHE)) LOOP
         d := R.ACCOUNT_DISPLAY_NAME;
         a := a+1;
       END LOOP;
       return 'read-secs:' || s || ', read-accts:' || a;
   END;
-  
+
   PROCEDURE LOADCACHES IS
       spec SPEC_DECODE;
       idx PLS_INTEGER;
       d VARCHAR2(64);
-    BEGIN  
-       -- populate accountCache 
+    BEGIN
+       -- populate accountCache
       idx := 1;
       FOR R IN (SELECT ACCOUNT_DISPLAY_NAME, ACCOUNT_ID FROM ACCOUNT) LOOP
         accountCache(R.ACCOUNT_DISPLAY_NAME) := R.ACCOUNT_ID;
@@ -735,7 +750,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       -- populate security cache
       idx := 1;
       FOR R IN (SELECT SECURITY_DISPLAY_NAME, SECURITY_TYPE, SECURITY_ID FROM SECURITY) LOOP
-        spec.SECURITY_ID := R.SECURITY_ID; 
+        spec.SECURITY_ID := R.SECURITY_ID;
         spec.SECURITY_DISPLAY_NAME := R.SECURITY_DISPLAY_NAME;
         spec.SECURITY_TYPE := R.SECURITY_TYPE;
         securityCache(R.SECURITY_DISPLAY_NAME) := spec;
@@ -744,15 +759,15 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       END LOOP;
       FOR R IN (SELECT * FROM TABLE(TQV.PIPESECCACHE)) LOOP
         d := R.SECURITY_DISPLAY_NAME;
-      END LOOP;      
+      END LOOP;
       LOGEVENT('INITIALIZED SECURITY CACHE: ' || securityCache.COUNT || ' SECURITIES');
     END LOADCACHES;
-  
+
   -- *******************************************************
   --    Package Initialization
   -- *******************************************************
-  
-  
+
+
   BEGIN
     LOADCACHES;
 END TQV;

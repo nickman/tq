@@ -57,6 +57,15 @@ create or replace PACKAGE TQV AS
   
   TYPE TQSBATCHCUR IS REF CURSOR RETURN TQBATCH_REC;
   
+  --TYPE INT_ARR IS TABLE OF INT;
+  TYPE NUM_ARR IS TABLE OF NUMBER;
+  TYPE CHAR_ARR IS TABLE OF CHAR;
+  TYPE ROWID_ARR IS TABLE OF ROWID;
+  TYPE SEC_DECODE_CACHE IS TABLE OF SPEC_DECODE INDEX BY SECURITY.SECURITY_DISPLAY_NAME%TYPE;  
+  TYPE ACCT_DECODE_CACHE IS TABLE OF ACCOUNT.ACCOUNT_ID%TYPE INDEX BY ACCOUNT.ACCOUNT_DISPLAY_NAME%TYPE;
+  TYPE CQNDECODE IS TABLE OF VARCHAR2(30) INDEX BY PLS_INTEGER;
+
+  
 
   
   
@@ -82,16 +91,27 @@ create or replace PACKAGE TQV AS
   FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED;
   -- Pipelined Query for viewing existing TQBATCHes
   FUNCTION GETBATCHES RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE;
-  -- Locks the trades in a batch  
+  -- Locks the stubs in a batch and assigns a batch id and batch timestamp
   PROCEDURE LOCKBATCH(batch IN OUT TQBATCH);
+  -- Relocks the stubs in a batch as part of the actual trade processing transaction
+  PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH);
   -- Locks the trades in an array of batches
   PROCEDURE LOCKBATCHES(batches IN TQBATCH_ARR);
+  -- Locks, selects and returns all the trades for a batch
+  FUNCTION STARTBATCH(tqbatch IN OUT TQBATCH) RETURN TQTRADE_ARR;
+  -- Updates all rows in the passed trade array
+  PROCEDURE SAVETRADES(trades IN TQTRADE_ARR);
+  -- Deletes all the stubs for a batch by the passed rowids
+  PROCEDURE FINISHBATCH(batchRowids IN XROWIDS);  
+  
   -- Updates the trades in a batch  
   --PROCEDURE UPDATEBATCH(batch IN TQBATCH);
   -- Updates the trades in an array of batches
   --PROCEDURE UPDATEBATCHES(batches IN TQBATCH_ARR);
   -- The TQSTUB insert handler, fired when a new trade comes into scope in the TQUEUE table
-  PROCEDURE HANDLE_INSERT(transaction_id RAW, ntfnds CQ_NOTIFICATION$_DESCRIPTOR);
+  PROCEDURE HANDLE_INSERT(transaction_id IN RAW, ntfnds IN CQ_NOTIFICATION$_DESCRIPTOR);
+  
+  PROCEDURE HANDLE_CHANGE(ntfnds IN CQ_NOTIFICATION$_DESCRIPTOR);
 
 
   -- =============================================================================
@@ -103,6 +123,8 @@ create or replace PACKAGE TQV AS
   PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0);
   -- Acquires the XID of the current transaction
   FUNCTION CURRENTXID RETURN RAW;
+  
+  FUNCTION BVDECODE(code IN NUMBER) RETURN INT_ARR;
   
   -- =====================================================================
   -- These are temp for testing
