@@ -45,13 +45,6 @@ select distinct event from event
 
 select event, count(*) from event group by event
  
-BEGIN
-  FOR i in 1..100 LOOP
-  INSERT INTO TQUEUE VALUES(SEQ_TQUEUE_ID.NEXTVAL, 'PENDING', 'c064e4ae-cb1c-4700-872f-eedde770c937',
-    '3c7dea15-cc46-4e9f-816a-f342c8089d86', NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
-  END LOOP;
-    COMMIT;
-END;
 
 DECLARE
   ixid RAW(8);
@@ -166,27 +159,6 @@ BEGIN
 END;
 
  
-DECLARE
-  ixid RAW(8) := NULL;
-  TXID VARCHAR2(200);
-  RID ROWID;
-BEGIN
-  FOR i in 1..100 LOOP
-  INSERT INTO TQUEUE VALUES(SEQ_TQUEUE_ID.NEXTVAL, 'PENDING', 'b346652a-5194-41a1-a3ef-ac73af8d7548',
-    '3b6d54cc-9bf5-40ed-966d-b0a4dbd1f7a2', NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL) 
-    RETURNING ROWID INTO RID;
-  /*
-  IF (ixid is null) THEN
-    --TXID := DBMS_TRANSACTION.local_transaction_id(TRUE);
-    --SELECT XID INTO ixid from V$TRANSACTION where xidusn || '.' || xidslot || '.' || xidsqn = TXID;
-    ixid := TQV.CURRENTXID();
-    DBMS_OUTPUT.PUT_LINE('XID: [' || ixid || ']');
-  END IF;
-  */
-  INSERT INTO TQXIDS VALUES (RID, TQV.CURRENTXID);    
-  END LOOP;
-    COMMIT;
-END;
 
 
 select * from tqxids
@@ -256,3 +228,123 @@ BEGIN
 END;
 
 
+BEGIN
+  TQV.GENACCTS;
+  COMMIT;
+  TQV.GENSECS;
+  COMMIT;
+  DBMS_OUTPUT.PUT_LINE(TQV.FORCELOADCACHE);
+  FOR i in 1..100 LOOP
+    TQV.GENTRADES;
+  END LOOP;
+END;
+
+
+
+
+DECLARE
+  batches TQBATCH_ARR;
+  batch TQBATCH;
+  trades TQTRADE_ARR;
+  trade TQTRADE;
+  now DATE := SYSDATE;
+BEGIN
+  select TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,TRADES ) 
+  BULK COLLECT INTO batches
+  FROM TABLE(TQV.QUERYTBATCHES(0)) 
+  ORDER BY FIRST_T;
+  DBMS_OUTPUT.put_line('FOUND ' || batches.COUNT || ' BATCHES');
+  TQV.LOCKBATCHES(batches);
+  DBMS_OUTPUT.put_line('LOCKED ' || batches.COUNT || ' BATCHES');
+  FOR i in 1..batches.COUNT LOOP
+    batch := batches(i);    
+    TQV.RELOCKBATCH(batch);
+    DBMS_OUTPUT.put_line('RELOCKED BATCH#' || i);
+    trades := TQV.STARTBATCH(batch);
+    now := SYSDATE;
+    FOR x in 1..trades.COUNT LOOP
+      trade := trades(x);
+      trade.STATUS_CODE := 'CLEARED';
+      trade.UPDATE_TS :=  now;
+    END LOOP;
+    TQV.SAVETRADES(trades);  
+    TQV.FINISHBATCH(batch.ROWIDS);
+    COMMIT;
+  END LOOP;
+END;
+
+
+DECLARE
+  batches TQBATCH_ARR;
+  batch TQBATCH;
+  trades TQTRADE_ARR;
+  now DATE := SYSDATE;
+  stubCount int;
+BEGIN
+  EXECUTE IMMEDIATE 'truncate table event';
+  select TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,TRADES ) 
+  BULK COLLECT INTO batches
+  FROM TABLE(TQV.QUERYTBATCHES(0,100,10)) 
+  ORDER BY FIRST_T;
+  --DBMS_OUTPUT.put_line('FOUND ' || batches.COUNT || ' BATCHES');
+  TQV.LOCKBATCHES(batches);
+  --DBMS_OUTPUT.put_line('LOCKED ' || batches.COUNT || ' BATCHES');
+  FOR i in 1..batches.COUNT LOOP
+    batch := batches(i);    
+    stubCount := batch.TRADES.COUNT;
+    TQV.RELOCKBATCH(batch);
+    --DBMS_OUTPUT.put_line('BATCH#' || i || ' RELOCK: b:' || stubCount || ', a:' || batch.TRADES.COUNT );
+    IF (stubCount != batch.TRADES.COUNT) THEN 
+      DBMS_OUTPUT.put_line('BATCH#' || i || ' LOST TRADES ON RELOCK: b:' || stubCount || ', a:' || batch.TRADES.COUNT );
+    END IF;
+    
+    trades := TQV.STARTBATCH(batch);
+    --DBMS_OUTPUT.put_line('BATCH#' || i || ' has [' || trades.COUNT || '] trades');
+    now := SYSDATE;
+    FOR x in 1..trades.COUNT LOOP
+      trades(x).STATUS_CODE := 'CLEARED';
+      trades(x).UPDATE_TS :=  now;
+      trades(x).ERROR_MESSAGE := NULL;
+      --TQV.LOGEVENT('UPDATED STATUS --> [' || trades(x).STATUS_CODE || '] for TRADE [' || trades(x).TQUEUE_ID || ']');
+    END LOOP;
+    TQV.SAVETRADES(trades);  
+    TQV.FINISHBATCH(batch.ROWIDS);
+    COMMIT;
+  END LOOP;
+END;
+
+
+select STATUS_CODE, count(*) from TQUEUE group by STATUS_CODE
+
+--  88979
+
+select 'TQUEUE', count(*) from tqueue
+UNION ALL
+select 'TQSTUBS', count(*) from tqstubs
+UNION ALL
+select 'EVENTS', count(*) from event
+UNION ALL
+select 'PENDING', count(*) from TQUEUE where status_code = 'PENDING'
+UNION ALL
+select 'CLEARED', count(*) from TQUEUE where status_code = 'CLEARED'
+
+
+select * from event order by event_id desc
+
+select * from TQUEUE where TQUEUE_ID = 10230
+
+select MAX(TQUEUE_ID) from TQSTUBS
+
+truncate table event
+
+
+SELECT queryid, regid, TO_CHAR(querytext) FROM user_cq_notification_queries
+
+BEGIN
+  DBMS_CQ_NOTIFICATION.DEREGISTER (6);
+END;
+
+SELECT * FROM TABLE(TQV.BVDECODE(BIN_TO_NUM(1,2,8)))
+
+
+create or replace TYPE INT_ARR FORCE IS TABLE OF INT;
