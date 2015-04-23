@@ -348,3 +348,43 @@ SELECT * FROM TABLE(TQV.BVDECODE(BIN_TO_NUM(1,2,8)))
 
 
 create or replace TYPE INT_ARR FORCE IS TABLE OF INT;
+
+
+  DECLARE
+  batches TQBATCH_ARR;
+  batch TQBATCH;
+  trades TQTRADE_ARR;
+  now DATE := SYSDATE;
+  stubCount int;
+BEGIN
+  EXECUTE IMMEDIATE 'truncate table event';
+  select TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,TRADES ) 
+  BULK COLLECT INTO batches
+  FROM TABLE(TQV.QUERYTBATCHES(0,100,10)) 
+  ORDER BY FIRST_T;
+  --DBMS_OUTPUT.put_line('FOUND ' || batches.COUNT || ' BATCHES');
+  TQV.LOCKBATCHES(batches);
+  --DBMS_OUTPUT.put_line('LOCKED ' || batches.COUNT || ' BATCHES');
+  FOR i in 1..batches.COUNT LOOP
+    batch := batches(i);    
+    stubCount := batch.TRADES.COUNT;
+    TQV.RELOCKBATCH(batch);
+    --DBMS_OUTPUT.put_line('BATCH#' || i || ' RELOCK: b:' || stubCount || ', a:' || batch.TRADES.COUNT );
+    IF (stubCount != batch.TRADES.COUNT) THEN 
+      DBMS_OUTPUT.put_line('BATCH#' || i || ' LOST TRADES ON RELOCK: b:' || stubCount || ', a:' || batch.TRADES.COUNT );
+    END IF;
+    
+    trades := TQV.STARTBATCH(batch);
+    --DBMS_OUTPUT.put_line('BATCH#' || i || ' has [' || trades.COUNT || '] trades');
+    now := SYSDATE;
+    FOR x in 1..trades.COUNT LOOP
+      trades(x).STATUS_CODE := 'CLEARED';
+      trades(x).UPDATE_TS :=  now;
+      trades(x).ERROR_MESSAGE := NULL;
+      --TQV.LOGEVENT('UPDATED STATUS --> [' || trades(x).STATUS_CODE || '] for TRADE [' || trades(x).TQUEUE_ID || ']');
+    END LOOP;
+    TQV.SAVETRADES(trades);  
+    TQV.FINISHBATCH(batch.ROWIDS);
+    COMMIT;
+  END LOOP;
+END;

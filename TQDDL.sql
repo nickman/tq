@@ -271,6 +271,12 @@ create or replace TYPE TQTRADE_ARR FORCE AS TABLE OF TQTRADE;
 create or replace TYPE XROWIDS FORCE AS TABLE OF VARCHAR2(18);
 /
 
+create or replace TYPE INT_ARR FORCE IS TABLE OF INT;
+/
+
+create or replace TYPE VARCHAR2_ARR FORCE IS TABLE OF VARCHAR2(200);
+/
+
 --------------------------------------------------------
 --  TQSTUB type
 --------------------------------------------------------
@@ -498,7 +504,7 @@ DECLARE
 BEGIN
   reginfo := cq_notification$_reg_info (
     'TQUEUE_INSERT_CALLBACK',                 -- The callback handler
-    DBMS_CQ_NOTIFICATION.QOS_QUERY +          -- Specifies Query Change, Reliable and with ROWIDs
+    --DBMS_CQ_NOTIFICATION.QOS_QUERY +          -- Specifies Query Change, Reliable and with ROWIDs
       DBMS_CQ_NOTIFICATION.QOS_RELIABLE + 
       DBMS_CQ_NOTIFICATION.QOS_ROWIDS,
     0,                                        -- No timeout 
