@@ -246,6 +246,10 @@ CREATE OR REPLACE VIEW TQUEUEV AS SELECT ROWIDTOCHAR(ROWID) XROWID, TQUEUE_ID, X
 --  DDL for Object Types
 --------------------------------------------------------
 
+CREATE OR REPLACE TYPE INT_ARR FORCE AS TABLE OF INT;
+/
+
+
   CREATE OR REPLACE TYPE TQTRADE FORCE AS OBJECT (
   XROWID                    VARCHAR2(18),
   TQUEUE_ID                 INT,
@@ -321,6 +325,8 @@ create or replace TYPE TQBATCH FORCE AS OBJECT (
   MEMBER PROCEDURE SETXIDS,
   MEMBER PROCEDURE SETXIDS(rowids IN XROWIDS),
   MEMBER FUNCTION XIDS RETURN XROWIDS,
+  MEMBER FUNCTION TXIDS RETURN XROWIDS,
+  MEMBER PROCEDURE UPDATE_TRADES(lockedTrades IN TQTRADE_ARR, droppedTrades OUT TQTRADE_ARR),
   MAP MEMBER FUNCTION GET_FIRST_TRADEQUEUE_ID RETURN NUMBER
 );
 /
@@ -328,8 +334,7 @@ create or replace TYPE TQBATCH FORCE AS OBJECT (
 --------------------------------------------------------
 --  TQBatch Body
 --------------------------------------------------------
-
-create or replace type body tqbatch as 
+create or replace type body tqbatch as
   MAP MEMBER FUNCTION GET_FIRST_TRADEQUEUE_ID RETURN NUMBER IS
   BEGIN
     return FIRST_T;
@@ -345,7 +350,7 @@ create or replace type body tqbatch as
             rids(i) := TRADES(i).XROWID;
       END LOOP;
       SELF.ROWIDS := rowids;
-    END IF;    
+    END IF;
   END;
   --
   MEMBER PROCEDURE SETXIDS(rowids IN XROWIDS) IS
@@ -359,6 +364,15 @@ create or replace type body tqbatch as
     END IF;
   END;
   --
+  MEMBER FUNCTION TXIDS RETURN XROWIDS IS
+    rids XROWIDS;
+  BEGIN
+    rids.EXTEND(TRADES.COUNT);
+    FOR i in 1..TRADES.COUNT LOOP
+      rids(i) := TRADES(i).TQROWID;
+    END LOOP;
+  END;
+--  
   MEMBER FUNCTION XIDS RETURN XROWIDS IS
     rids XROWIDS;
   BEGIN
@@ -367,11 +381,28 @@ create or replace type body tqbatch as
       rids.extend(TRADES.COUNT);
       FOR i in 1..TRADES.COUNT LOOP
             rids(i) := TRADES(i).XROWID;
-      END LOOP;    
+      END LOOP;
       RETURN rids;
-    ELSE  
+    ELSE
       return SELF.ROWIDS;
-    END IF;    
+    END IF;
+  END;
+--
+  MEMBER PROCEDURE UPDATE_TRADES(lockedTrades IN TQTRADE_ARR, droppedTrades OUT TQTRADE_ARR) IS  
+    updatedTQStubs TQSTUB_ARR := new TQSTUB_ARR();
+    lockedTQIds INT_ARR := new INT_ARR();
+    currentTQIds INT_ARR := new INT_ARR();
+    
+  BEGIN
+    currentTQIds.extend(SELF.TRADES.COUNT);
+    IF (droppedTrades IS NULL) THEN
+      NULL;
+    END IF;
+    updatedTQStubs.EXTEND(lockedTrades.COUNT);
+    FOR i in 1..lockedTrades.COUNT LOOP
+      NULL;
+    END LOOP;
+    SELF.TRADES := updatedTQStubs;
   END;
 END;
 /
