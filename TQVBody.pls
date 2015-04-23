@@ -15,7 +15,12 @@ create or replace PACKAGE BODY TQV AS
   -- These are temp for testing
   -- =====================================================================
   TYPE SEC_DECODE_CACHE_IDX IS TABLE OF SEC_DECODE INDEX BY PLS_INTEGER;
-  TYPE ACCT_DECODE_CACHE_IDX IS TABLE OF ACCT_DECODE INDEX BY PLS_INTEGER;
+  TYPE ACCT_DECODE_CACHE_IDX IS TABLE OF ACCT_DECODE INDEX BY PLS_INTEGER;  
+  
+  
+  TYPE XROWIDSET IS TABLE OF VARCHAR2(18) INDEX BY VARCHAR2(18);
+  TYPE CHANGE_TABLE_ARR IS TABLE OF XROWIDSET INDEX BY BINARY_INTEGER;
+  
   accountCacheIdx ACCT_DECODE_CACHE_IDX;
   securityCacheIdx SEC_DECODE_CACHE_IDX;
   securityTypes CHAR_ARR := new CHAR_ARR('A', 'B', 'C', 'D', 'E', 'V', 'W', 'X', 'Y', 'Z', 'P');
@@ -163,7 +168,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     LOOP
       FETCH p INTO trade;
       EXIT WHEN p%NOTFOUND;
-      PIPE ROW(trade);    
+      PIPE ROW(trade);
       IF(p%ROWCOUNT=MAX_ROWS) THEN
         EXIT;
       END IF;
@@ -599,7 +604,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
 
   PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH) IS
     lockedStubs TQSTUB_ARR;
-    now TIMESTAMP := SYSTIMESTAMP;  
+    now TIMESTAMP := SYSTIMESTAMP;
   BEGIN
     SELECT TQSTUB(
         ROWIDTOCHAR(ROWID),
@@ -612,13 +617,13 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
         BATCH_ID,
         BATCH_TS
     ) BULK COLLECT INTO lockedStubs
-    FROM TQSTUBS 
+    FROM TQSTUBS
     WHERE ROWID IN (
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
-    ) FOR UPDATE SKIP LOCKED;  
+    ) FOR UPDATE SKIP LOCKED;
     batch.TRADES := lockedStubs;
   END RELOCKBATCH;
-    
+
   -- *******************************************************
   --    Locks, selects and returns all the trades for a batch
   -- *******************************************************
@@ -640,7 +645,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     --TRADES.TQSTUB.TQUEUE_ID
     RETURN trades;
   END STARTBATCH;
---  
+--
   -- *******************************************************
   --    Updates all rows in TQUEUE from the passed trade array
   -- *******************************************************
@@ -653,13 +658,13 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
         STATUS_CODE = tr(i).STATUS_CODE,
         UPDATE_TS = tr(i).UPDATE_TS,
         ERROR_MESSAGE = tr(i).ERROR_MESSAGE
-      WHERE ROWID = CHARTOROWID(tr(i).XROWID);  
+      WHERE ROWID = CHARTOROWID(tr(i).XROWID);
   END SAVETRADES;
-  
 
-  
-  
---  
+
+
+
+--
   -- *******************************************************
   --    Deletes all the stubs for a batch by the passed rowids
   -- *******************************************************
@@ -669,12 +674,138 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   BEGIN
     DELETE FROM TQSTUBS WHERE ROWID IN (
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rids)
-    );    
+    );
   END FINISHBATCH;
-
-  PROCEDURE HANDLE_CHANGE(ntfnds IN CQ_NOTIFICATION$_DESCRIPTOR) AS
+  
+  FUNCTION OVERFLOW(txid IN RAW) RETURN XROWIDS IS
+    rids XROWIDS;
   BEGIN
-    -- TODO: Implementation required for PROCEDURE TQV.HANDLE_CHANGE
+      -- batch was too big. Need to read from TQXIDS
+      LOGEVENT('HandleInserts: Batch Overflow on TX:' || txid);
+      SELECT ROWIDTOCHAR(ROWID) BULK COLLECT INTO rids FROM TQUEUE WHERE XID = txid; 
+      RETURN rids;
+  END OVERFLOW;
+  
+  -- SELECT SYS.CHNF$_RDESC(0, ROWID) BULK COLLECT INTO row_desc_array FROM TQUEUE WHERE XID = ntfnds.transaction_id;
+  
+  FUNCTION OVERFLOWTABLES(txid IN RAW) RETURN XROWIDS IS
+    rids XROWIDS;
+  BEGIN
+    SELECT ROWIDTOCHAR(ROWID) BULK COLLECT INTO rids FROM TQUEUE WHERE XID = txid; 
+    RETURN rids;
+  END OVERFLOWTABLES;
+  
+  PROCEDURE APPEND(rowidset IN OUT XROWIDSET, t IN CQ_NOTIFICATION$_TABLE) IS
+    rid VARCHAR2(18);
+  BEGIN
+    FOR i IN 1..t.row_desc_array.LAST LOOP
+      rid := t.row_desc_array(i).row_id;
+      rowidset(rid) := rid;
+    END LOOP;
+  END APPEND;
+  
+  PROCEDURE APPEND(rowidset IN OUT XROWIDSET, t IN XROWIDS) IS
+    rid VARCHAR2(18);
+  BEGIN
+    FOR i IN 1..t.LAST LOOP
+      rid := t(i);
+      rowidset(rid) := rid;
+    END LOOP;
+  END APPEND;
+  
+
+--
+  -- *******************************************************
+  --    Handles and delegates any CQ notifications
+  -- *******************************************************
+
+  PROCEDURE HANDLE_CHANGE(n IN CQ_NOTIFICATION$_DESCRIPTOR) AS
+    tableArrays CQ_NOTIFICATION$_TABLE_ARRAY;
+    rowids ROWID_ARR := NEW ROWID_ARR();
+    rids XROWIDS;
+    currentTable CQ_NOTIFICATION$_TABLE;
+    overflow XROWIDS := NULL;
+    opKeys VARCHAR2_ARR;
+    opKeyTab CQ_NOTIFICATION$_TABLE;
+    idx PLS_INTEGER;
+    opType BINARY_INTEGER;
+    
+    hasAllRowsInserts BOOLEAN := FALSE;
+    hasAllRowsUpdates BOOLEAN := FALSE;
+    hasAllRowsDeletes BOOLEAN := FALSE;
+    
+    insertRowSet XROWIDSET;
+    updateRowSet XROWIDSET;
+    deleteRowSet XROWIDSET;
+    
+    
+  
+  BEGIN
+    LOGEVENT(CQN_HELPER.PRINT(n));
+    IF n IS NULL THEN RETURN; END IF;
+    -- Loop through all table arrays 
+    -- For each table array, map the ROWIDs into all applicable
+    -- t(INSERT|UPDATE|DELETE) XROWIDS 
+    
+    
+    IF n.event_type = CQN_HELPER.EVENT_OBJCHANGE THEN
+      FOR i IN 1..n.table_desc_array.LAST LOOP
+        opType := n.table_desc_array(i).opflags;
+        IF CQN_HELPER.ISALLROWS(opType) THEN
+          IF( overflow IS NULL ) THEN
+            overflow := OVERFLOWTABLES(n.transaction_id);
+            IF CQN_HELPER.ISUPDATE(opType) THEN 
+              APPEND(updateRowSet, overflow);
+              hasAllRowsUpdates := TRUE;
+            END IF;
+            IF CQN_HELPER.ISINSERT(opType) THEN 
+              APPEND(insertRowSet, overflow);
+              hasAllRowsInserts := TRUE;
+            END IF;
+            IF CQN_HELPER.ISDELETE(opType) THEN 
+              APPEND(deleteRowSet, overflow);
+              hasAllRowsDeletes := TRUE;
+            END IF;
+          END IF;          
+        END IF;
+      END LOOP;
+      
+    ELSIF n.event_type = CQN_HELPER.EVENT_QUERYCHANGE THEN      
+      FOR i in 1..n.query_desc_array.COUNT LOOP
+        FOR x in 1..n.query_desc_array(i).table_desc_array.COUNT LOOP
+          tableArrays(tableArrays.COUNT + 1) := n.query_desc_array(i).table_desc_array(x);
+        END LOOP;
+      END LOOP;      
+    ELSE
+      LOGEVENT('No Handler for CQ Change [' || CQN_HELPER.DECODE_EVENT(n.event_type) || ']');
+      RETURN;
+    END IF;
+    LOGEVENT('HC: Found [' || tableArrays.COUNT || '] total table arrays');
+    -- All the table_desc_arrays are now in tableArrays
+    FOR i in 1..tableArrays.COUNT LOOP
+      currentTable := tableArrays(i);
+      IF (bitand(currentTable.opflags, CQN_HELPER.ALL_ROWS) = 0) THEN
+        IF( overflow IS NULL ) THEN
+          overflow  :=  OVERFLOWTABLES(n.transaction_id);
+          opKeys := CQN_HELPER.DECODE_OP(currentTable.opflags);
+          FOR i in 1..opKeys.COUNT LOOP
+            IF(FALSE) THEN
+              --t(opKeys(i)) := NEW CQ_NOTIFICATION$_TABLE(CQN_HELPER.OP_CODEFOR(opKeys(i)), '', overflow.COUNT,  overflow);
+              NULL;
+            ELSE 
+              --opKeyTab := t(opKeys(i));
+              idx := opKeyTab.row_desc_array.COUNT;
+              opKeyTab.row_desc_array.EXTEND(overflow.COUNT);
+              FOR x in 1..overflow.COUNT LOOP
+                idx := idx + 1;
+                --opKeyTab.row_desc_array(idx) :=  overflow(x);                
+              END LOOP;
+              opKeyTab.numrows := idx;
+            END IF;
+          END LOOP;
+        END IF;
+      END IF;
+    END LOOP;
     NULL;
   END HANDLE_CHANGE;
 
@@ -683,6 +814,59 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     -- TODO: Implementation required for FUNCTION TQV.BVDECODE
     RETURN NULL;
   END BVDECODE;
+  
+  
+  -- NOTES
+  /*
+  
+  NEED SUSPEND/RESUME for OLTP PURGE
+  
+  2015-04-23 11:24:21 CQ NOTIF ||:regid:140, XID:0A001E00E6D20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:77, 
+    qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:UPDATEOP, table:TQREACTOR.TQUEUE, rows: 99
+
+2015-04-23 11:23:59 CQ NOTIF ||:regid:140, XID:0A000300ADD20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:77, 
+    qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:DELETEOP, table:TQREACTOR.TQUEUE, rows: 99
+
+2015-04-23 11:19:15 CQ NOTIF ||:regid:139, XID:0200190038AE0100, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+    qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:UPDATEOP, table:TQREACTOR.TQUEUE, rows: 99
+
+2015-04-23 11:18:20 CQ NOTIF ||:regid:139, XID:09002000DCB80200, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+    qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:ALL_ROWS, INSERTOP, table:TQREACTOR.TQUEUE, rows: 3220 (ALL)
+
+2015-04-23 11:17:45 CQ NOTIF ||:regid:139, XID:01001F0005B40100, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+    qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:INSERTOP, table:TQREACTOR.TQUEUE, rows: 100
+
+2015-04-23 11:17:23 CQ NOTIF ||:regid:139, XID:0A001E00E5D20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+    qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:ALL_ROWS, INSERTOP, table:TQREACTOR.TQUEUE, rows: 2120 (ALL)
+    
+TYPE CQ_NOTIFICATION$_DESCRIPTOR IS OBJECT(
+   registration_id    NUMBER,
+   transaction_id     RAW(8),
+   dbname             VARCHAR2(30),
+   event_type         NUMBER,
+   numtables          NUMBER,
+   table_desc_array   CQ_NOTIFICATION$_TABLE_ARRAY,
+   query_desc_array   CQ_NOTIFICATION$_QUERY_ARRAY);
+   
+TYPE CQ_NOTIFICATION$_QUERY IS OBJECT (
+  queryid            NUMBER,
+  queryop            NUMBER,  -- Operation describing change to the query
+  table_desc_array   CQ_NOTIFICATION$_TABLE_ARRAY);
+  
+TYPE CQ_NOTIFICATION$_TABLE  IS OBJECT (
+  opflags            NUMBER,  -- It can be an OR of the following bit fields - INSERTOP, UPDATEOP, DELETEOP, DROPOP, ALTEROP, ALL_ROWS
+  table_name         VARCHAR2(2*M_IDEN+1),
+  numrows            NUMBER,  -- NULL if ALL_ROWS
+  row_desc_array     CQ_NOTIFICATION$_ROW_ARRAY)  
+  
+TYPE CQ_NOTIFICATION$_ROW IS OBJECT (
+  opflags            NUMBER,  -- could be INSERTOP, UPDATEOP or DELETEOP
+  row_id             VARCAHR2 (2000));  
+  
+  
+   
+   
+  */
 
 
   -- *******************************************************
@@ -715,31 +899,17 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
 
 
 
-  -- *******************************************************
-  --    Load cache procedure
-  -- *******************************************************
-
-  FUNCTION FORCELOADCACHE RETURN VARCHAR2 IS
-    d VARCHAR2(64);
-    s NUMBER := 0;
-    a NUMBER := 0;
-  BEGIN
-      FOR R IN (SELECT * FROM TABLE(TQV.PIPESECCACHE)) LOOP
-        d := R.SECURITY_DISPLAY_NAME;
-        s := s+1;
-      END LOOP;
-      FOR R IN (SELECT * FROM TABLE(TQV.PIPEACCTCACHE)) LOOP
-        d := R.ACCOUNT_DISPLAY_NAME;
-        a := a+1;
-      END LOOP;
-      return 'read-secs:' || s || ', read-accts:' || a;
-  END;
 
   PROCEDURE LOADCACHES IS
       spec SPEC_DECODE;
       idx PLS_INTEGER;
       d VARCHAR2(64);
     BEGIN
+       -- clear caches
+      accountCache.DELETE;
+      accountCacheIdx.DELETE;
+      securityCache.DELETE;
+      securityCacheIdx.DELETE;       
        -- populate accountCache
       idx := 1;
       FOR R IN (SELECT ACCOUNT_DISPLAY_NAME, ACCOUNT_ID FROM ACCOUNT) LOOP
@@ -766,6 +936,27 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       END LOOP;
       LOGEVENT('INITIALIZED SECURITY CACHE: ' || securityCache.COUNT || ' SECURITIES');
     END LOADCACHES;
+
+  -- *******************************************************
+  --    Load cache procedure
+  -- *******************************************************
+
+  FUNCTION FORCELOADCACHE RETURN VARCHAR2 IS
+    d VARCHAR2(64);
+    s NUMBER := 0;
+    a NUMBER := 0;
+  BEGIN
+      LOADCACHES;
+      FOR R IN (SELECT * FROM TABLE(TQV.PIPESECCACHE)) LOOP
+        d := R.SECURITY_DISPLAY_NAME;
+        s := s+1;
+      END LOOP;
+      FOR R IN (SELECT * FROM TABLE(TQV.PIPEACCTCACHE)) LOOP
+        d := R.ACCOUNT_DISPLAY_NAME;
+        a := a+1;
+      END LOOP;
+      return 'read-secs:' || s || ', read-accts:' || a;
+  END;
 
   -- *******************************************************
   --    Package Initialization

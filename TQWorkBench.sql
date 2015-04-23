@@ -388,3 +388,141 @@ BEGIN
     COMMIT;
   END LOOP;
 END;
+
+
+
+
+/*
+SELECT queryid, regid, TO_CHAR(querytext) FROM user_cq_notification_queries
+SELECT * FROM dba_cq_notification_queries
+SELECT * FROM dba_change_notification_regs
+
+BEGIN
+  DBMS_CQ_NOTIFICATION.DEREGISTER (139);
+END;
+
+DECLARE
+  reginfo  CQ_NOTIFICATION$_REG_INFO;
+  v_cursor SYS_REFCURSOR;
+  regid    NUMBER;
+BEGIN
+  reginfo := cq_notification$_reg_info (
+    'TQUEUE_INSERT_CALLBACK',                 -- The callback handler
+    DBMS_CQ_NOTIFICATION.QOS_QUERY +          -- Specifies Query Change, Reliable and with ROWIDs
+      DBMS_CQ_NOTIFICATION.QOS_RELIABLE + 
+      DBMS_CQ_NOTIFICATION.QOS_ROWIDS,
+    0,                                        -- No timeout 
+    DBMS_CQ_NOTIFICATION.INSERTOP +           -- Specifies INSERT Ops  (DBMS_CQ_NOTIFICATION.ALL_OPERATIONS)
+      DBMS_CQ_NOTIFICATION.UPDATEOP + 
+      DBMS_CQ_NOTIFICATION.DELETEOP,
+    0                                         -- Ignored for query result change notification 
+  );
+
+  regid := DBMS_CQ_NOTIFICATION.new_reg_start(reginfo);
+
+  OPEN v_cursor FOR
+    SELECT DBMS_CQ_NOTIFICATION.CQ_NOTIFICATION_QUERYID, ROWID FROM TQUEUE
+    WHERE STATUS_CODE IN ('PENDING', 'ENRICH', 'RETRY');
+  CLOSE v_cursor;
+  DBMS_CQ_NOTIFICATION.REG_END;
+  COMMIT;
+  --DBMS_CQ_NOTIFICATION.SET_ROWID_THRESHOLD('TQREACTOR.TQUEUE', 100);
+END;
+/
+
+BEGIN
+  DBMS_CQ_NOTIFICATION.SET_ROWID_THRESHOLD('TQREACTOR.TQUEUE', 100);
+END;
+
+
+*/
+
+BEGIN  
+  EXECUTE IMMEDIATE 'truncate table account';
+  EXECUTE IMMEDIATE 'truncate table security';
+  EXECUTE IMMEDIATE 'truncate table tqueue';
+  EXECUTE IMMEDIATE 'truncate table event';
+  TQV.GENACCTS(10);
+  COMMIT;
+  TQV.GENSECS(100);
+  COMMIT;  
+  DBMS_OUTPUT.PUT_LINE(TQV.FORCELOADCACHE);
+  --FOR i in 1..100 LOOP
+    TQV.GENTRADES(10);
+  --END LOOP;
+  COMMIT;
+END;
+
+BEGIN  
+  /*
+  TQV.GENACCTS(10);
+  COMMIT;
+  TQV.GENSECS(100);
+  COMMIT;  
+  DBMS_OUTPUT.PUT_LINE(TQV.FORCELOADCACHE);
+  */
+  
+  --FOR i in 1..100 LOOP
+    TQV.GENTRADES(1000);
+  --END LOOP;
+  COMMIT;
+END;
+
+
+
+begin
+  update tqueue set status_code = 'CLEARED' where rownum < 100;
+  --delete from tqueue where rownum < 100;
+  commit;
+end;  
+
+
+select * from event order by event_id desc
+
+truncate table event
+
+select 'ACCOUNTS', count(*) from account
+UNION ALL
+select 'SECURITIES', count(*) from security
+UNION ALL
+select 'TRADES', count(*) from tqueue
+UNION ALL
+select 'STUBS', count(*) from tqstubs
+
+
+
+DECLARE
+TYPE strings_nt 
+IS TABLE OF VARCHAR2(100);
+my_favorites strings_nt;
+dad_favorites strings_nt;
+our_favorites 
+strings_nt := strings_nt ();
+
+BEGIN
+
+my_favorites 
+:= strings_nt ('CHOCOLATE'
+, 'BRUSSEL SPROUTS'
+, 'SPIDER ROLL'
+);
+
+dad_favorites 
+:= strings_nt ('PICKLED HERRING' 
+, 'POTATOES'
+, 'PASTRAMI'
+, 'CHOCOLATE'
+);
+
+our_favorites := 
+my_favorites 
+MULTISET UNION 
+dad_favorites;
+
+my_favorites := our_favorites;
+
+FOR i in my_favorites.first..my_favorites.last
+LOOP
+DBMS_OUTPUT.PUT_LINE ( i || '->' || my_favorites(i));
+END LOOP;
+END;
