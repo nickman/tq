@@ -367,6 +367,19 @@ create or replace TYPE ACCT_DECODE_ARR IS  TABLE OF ACCT_DECODE;
   BATCH_TS
   FROM TQSTUBS;
 
+  -- *******************************************************
+  --    Autonomous TX Logger
+  -- *******************************************************
+
+
+  CREATE OR REPLACE PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0) IS
+    PRAGMA AUTONOMOUS_TRANSACTION;
+  BEGIN
+    INSERT INTO EVENT(EVENT_ID, ERRC, TS, EVENT) VALUES (SEQ_EVENT_ID.NEXTVAL, ABS(errcode), SYSDATE, msg);
+    COMMIT;
+  END LOGEVENT;
+  /
+
 
 
 --------------------------------------------------------
@@ -386,6 +399,14 @@ create or replace TYPE ACCT_DECODE_ARR IS  TABLE OF ACCT_DECODE;
 /
 
 --------------------------------------------------------
+--  TESTDATA Package
+--------------------------------------------------------
+@TESTDATA.pls
+/
+@TESTDATABody.pls
+/
+
+--------------------------------------------------------
 --  TQBATCHOV Object view of TQBATCHes
 --------------------------------------------------------
 
@@ -400,13 +421,14 @@ SELECT * FROM TABLE(TQV.GETBATCHES);
 --------------------------------------------------------
 
 create or replace PROCEDURE TQUEUE_INSERT_CALLBACK (
-  ntfnds IN CQ_NOTIFICATION$_DESCRIPTOR   ) IS  
+  ntfnds IN OUT CQ_NOTIFICATION$_DESCRIPTOR   ) IS  
 BEGIN
 /*
   IF (ntfnds.event_type != DBMS_CQ_NOTIFICATION.EVENT_QUERYCHANGE) THEN
     RETURN;
   END IF;
 */  
+  LOGEVENT('CALLBACK:' || ntfnds.transaction_id);
   TQV.HANDLE_CHANGE(
     ntfnds
   );
@@ -415,7 +437,7 @@ BEGIN
         errm VARCHAR2(2000) := SQLERRM;
         errc NUMBER := SQLCODE;
       BEGIN
-        TQV.LOGEVENT('CALLBACK ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+        LOGEVENT('CALLBACK ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
       END;
   
 END;
@@ -443,7 +465,7 @@ BEGIN
     WHERE STATUS_CODE IN ('PENDING', 'ENRICH', 'RETRY');
   CLOSE v_cursor;
   DBMS_CQ_NOTIFICATION.REG_END;
-  DBMS_CQ_NOTIFICATION.SET_ROWID_THRESHOLD('TQUEUE', 100);
+  --DBMS_CQ_NOTIFICATION.SET_ROWID_THRESHOLD('TQUEUE', 100);
 END;
 /
 

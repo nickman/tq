@@ -14,144 +14,11 @@ create or replace PACKAGE BODY TQV AS
   -- =====================================================================
   -- These are temp for testing
   -- =====================================================================
-  TYPE SEC_DECODE_CACHE_IDX IS TABLE OF SEC_DECODE INDEX BY PLS_INTEGER;
-  TYPE ACCT_DECODE_CACHE_IDX IS TABLE OF ACCT_DECODE INDEX BY PLS_INTEGER;  
   
   
   TYPE XROWIDSET IS TABLE OF VARCHAR2(18) INDEX BY VARCHAR2(18);
   TYPE CHANGE_TABLE_ARR IS TABLE OF XROWIDSET INDEX BY BINARY_INTEGER;
   
-  accountCacheIdx ACCT_DECODE_CACHE_IDX;
-  securityCacheIdx SEC_DECODE_CACHE_IDX;
-  securityTypes CHAR_ARR := new CHAR_ARR('A', 'B', 'C', 'D', 'E', 'V', 'W', 'X', 'Y', 'Z', 'P');
-
-  -- =====================================================================
-  -- ==== done ====
-  -- =====================================================================
-  accountCache ACCT_DECODE_CACHE;
-  securityCache SEC_DECODE_CACHE;
-  -- =====================================================================
-  -- These are temp for testing
-  -- =====================================================================
---
-  -- *******************************************************
-  --    Returns a random security
-  --    To query directly: select * FROM TABLE(NEW SEC_DECODE_ARR(TQV.RANDOMSEC))
-  -- *******************************************************
-  FUNCTION RANDOMSEC RETURN SEC_DECODE IS
-    sz NUMBER := securityCacheIdx.COUNT-1;
-    rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
-  BEGIN
-    IF rand = 0 THEN rand := 1; END IF;
-    return securityCacheIdx(rand);
-    EXCEPTION WHEN OTHERS THEN
-      DECLARE
-        errm VARCHAR2(2000) := SQLERRM;
-        errc NUMBER := SQLCODE;
-      BEGIN
-        LOGEVENT( errm || ' : Failed RANDOMSEC. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
-        raise;
-      END;
-  END RANDOMSEC;
---
-  -- *******************************************************
-  --    Returns a random account
-  --    To query directly: select * FROM TABLE(NEW ACCT_DECODE_ARR(TQV.RANDOMACCT))
-  -- *******************************************************
-  FUNCTION RANDOMACCT RETURN ACCT_DECODE IS
-    sz NUMBER := accountCacheIdx.COUNT-1;
-    rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
-  BEGIN
-    IF rand = 0 THEN rand := 1; END IF;
-    return accountCacheIdx(rand);
-    EXCEPTION WHEN OTHERS THEN
-      DECLARE
-        errm VARCHAR2(2000) := SQLERRM;
-        errc NUMBER := SQLCODE;
-
-      BEGIN
-        LOGEVENT( errm || ' : Failed RANDOMACCT. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
-        raise;
-      END;
-  END RANDOMACCT;
---
-  -- *******************************************************
-  --    Returns a random security type
-  -- *******************************************************
-FUNCTION RANDOMSECTYPE RETURN CHAR IS
-    sz NUMBER := securityTypes.COUNT;
-    rand NUMBER := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, sz));
-  BEGIN
-    IF rand = 0 THEN rand := 1; END IF;
-    return securityTypes(rand);
-    EXCEPTION WHEN OTHERS THEN
-      DECLARE
-        errm VARCHAR2(2000) := SQLERRM;
-        errc NUMBER := SQLCODE;
-
-      BEGIN
-        LOGEVENT( errm || ' : Failed RANDOMSECTYPE. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
-        raise;
-      END;
-  END RANDOMSECTYPE;
---
-  FUNCTION PIPEACCTCACHE RETURN ACCT_DECODE_ARR PIPELINED IS
-  BEGIN
-    FOR i in 1..accountCacheIdx.COUNT LOOP
-      PIPE ROW(accountCacheIdx(i));
-    END LOOP;
-  END;
---
-  FUNCTION PIPESECCACHE RETURN SEC_DECODE_ARR PIPELINED IS
-  BEGIN
-    FOR i in 1..securityCacheIdx.COUNT LOOP
-      PIPE ROW(securityCacheIdx(i));
-    END LOOP;
-  END;
-
-
---
-  -- *******************************************************
-  --    Generates the specified number of randomized trades
-  --    and inserts them into TQUEUE
-  -- *******************************************************
-  PROCEDURE GENTRADES(tradeCount IN NUMBER DEFAULT 1000) IS
-    account ACCT_DECODE;
-    security SEC_DECODE;
-  BEGIN
-    FOR i in 1..tradeCount LOOP
-      account := RANDOMACCT;
-      security := RANDOMSEC;
-      INSERT INTO TQUEUE
-        VALUES(SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',  security.SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
-    END LOOP;
-    COMMIT;
-  END GENTRADES;
---
-  -- *******************************************************
-  --    Generates the specified number of randomized accounts
-  --    and inserts them into ACCOUNT
-  -- *******************************************************
-  PROCEDURE GENACCTS(acctCount IN NUMBER DEFAULT 1000) IS
-  BEGIN
-    FOR i in 1..acctCount LOOP
-      INSERT INTO ACCOUNT VALUES(SEQ_ACCOUNT_ID.NEXTVAL, SYS_GUID());
-    END LOOP;
-    COMMIT;
-  END GENACCTS;
---
-  -- *******************************************************
-  --    Generates the specified number of randomized securities
-  --    and inserts them into SECURITY
-  -- *******************************************************
-  PROCEDURE GENSECS(secCount IN NUMBER DEFAULT 10000) IS
-  BEGIN
-    FOR i in 1..secCount LOOP
-      INSERT INTO SECURITY VALUES(SEQ_SECURITY_ID.NEXTVAL, SYS_GUID(), TQV.RANDOMSECTYPE);
-    END LOOP;
-    COMMIT;
-  END GENSECS;
-
   -- =====================================================================
   -- ==== done ====
   -- =====================================================================
@@ -661,7 +528,12 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       WHERE ROWID = CHARTOROWID(tr(i).XROWID);
   END SAVETRADES;
 
-
+  /*
+      !!!!!   
+        Need to put independent logger in CQN CALLBACK.
+      !!!!!
+  
+  */
 
 
 --
@@ -695,11 +567,11 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     RETURN rids;
   END OVERFLOWTABLES;
   
-  PROCEDURE APPEND(rowidset IN OUT XROWIDSET, t IN CQ_NOTIFICATION$_TABLE) IS
+  PROCEDURE APPEND(rowidset IN OUT XROWIDSET, t IN CQ_NOTIFICATION$_ROW_ARRAY) IS
     rid VARCHAR2(18);
   BEGIN
-    FOR i IN 1..t.row_desc_array.LAST LOOP
-      rid := t.row_desc_array(i).row_id;
+    FOR i IN 1..t.LAST LOOP
+      rid := t(i).row_id;
       rowidset(rid) := rid;
     END LOOP;
   END APPEND;
@@ -719,11 +591,10 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   --    Handles and delegates any CQ notifications
   -- *******************************************************
 
-  PROCEDURE HANDLE_CHANGE(n IN CQ_NOTIFICATION$_DESCRIPTOR) AS
-    tableArrays CQ_NOTIFICATION$_TABLE_ARRAY;
+  PROCEDURE HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR) AS
+    tableArrays CQ_NOTIFICATION$_TABLE_ARRAY := CQ_NOTIFICATION$_TABLE_ARRAY();
     rowids ROWID_ARR := NEW ROWID_ARR();
     rids XROWIDS;
-    currentTable CQ_NOTIFICATION$_TABLE;
     overflow XROWIDS := NULL;
     opKeys VARCHAR2_ARR;
     opKeyTab CQ_NOTIFICATION$_TABLE;
@@ -747,66 +618,61 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     -- For each table array, map the ROWIDs into all applicable
     -- t(INSERT|UPDATE|DELETE) XROWIDS 
     
-    
     IF n.event_type = CQN_HELPER.EVENT_OBJCHANGE THEN
-      FOR i IN 1..n.table_desc_array.LAST LOOP
-        opType := n.table_desc_array(i).opflags;
-        IF CQN_HELPER.ISALLROWS(opType) THEN
-          IF( overflow IS NULL ) THEN
-            overflow := OVERFLOWTABLES(n.transaction_id);
-            IF CQN_HELPER.ISUPDATE(opType) THEN 
-              APPEND(updateRowSet, overflow);
-              hasAllRowsUpdates := TRUE;
-            END IF;
-            IF CQN_HELPER.ISINSERT(opType) THEN 
-              APPEND(insertRowSet, overflow);
-              hasAllRowsInserts := TRUE;
-            END IF;
-            IF CQN_HELPER.ISDELETE(opType) THEN 
-              APPEND(deleteRowSet, overflow);
-              hasAllRowsDeletes := TRUE;
-            END IF;
-          END IF;          
-        END IF;
-      END LOOP;
+      tableArrays := n.table_desc_array;
+    ELSIF n.event_type = CQN_HELPER.EVENT_QUERYCHANGE THEN
+      idx := tableArrays.COUNT;
       
-    ELSIF n.event_type = CQN_HELPER.EVENT_QUERYCHANGE THEN      
-      FOR i in 1..n.query_desc_array.COUNT LOOP
-        FOR x in 1..n.query_desc_array(i).table_desc_array.COUNT LOOP
-          tableArrays(tableArrays.COUNT + 1) := n.query_desc_array(i).table_desc_array(x);
+      FOR i IN 1..n.query_desc_array.COUNT LOOP        
+        FOR x IN 1..n.query_desc_array(i).table_desc_array.COUNT LOOP
+          tableArrays.EXTEND();    
+          idx := idx +1;
+          tableArrays(idx) := n.query_desc_array(i).table_desc_array(x);
         END LOOP;
-      END LOOP;      
-    ELSE
-      LOGEVENT('No Handler for CQ Change [' || CQN_HELPER.DECODE_EVENT(n.event_type) || ']');
-      RETURN;
+      END LOOP;
     END IF;
-    LOGEVENT('HC: Found [' || tableArrays.COUNT || '] total table arrays');
-    -- All the table_desc_arrays are now in tableArrays
-    FOR i in 1..tableArrays.COUNT LOOP
-      currentTable := tableArrays(i);
-      IF (bitand(currentTable.opflags, CQN_HELPER.ALL_ROWS) = 0) THEN
+    
+    
+    FOR i IN 1..tableArrays.LAST LOOP
+      opType := tableArrays(i).opflags;
+      IF CQN_HELPER.ISALLROWS(opType) THEN
         IF( overflow IS NULL ) THEN
-          overflow  :=  OVERFLOWTABLES(n.transaction_id);
-          opKeys := CQN_HELPER.DECODE_OP(currentTable.opflags);
-          FOR i in 1..opKeys.COUNT LOOP
-            IF(FALSE) THEN
-              --t(opKeys(i)) := NEW CQ_NOTIFICATION$_TABLE(CQN_HELPER.OP_CODEFOR(opKeys(i)), '', overflow.COUNT,  overflow);
-              NULL;
-            ELSE 
-              --opKeyTab := t(opKeys(i));
-              idx := opKeyTab.row_desc_array.COUNT;
-              opKeyTab.row_desc_array.EXTEND(overflow.COUNT);
-              FOR x in 1..overflow.COUNT LOOP
-                idx := idx + 1;
-                --opKeyTab.row_desc_array(idx) :=  overflow(x);                
-              END LOOP;
-              opKeyTab.numrows := idx;
-            END IF;
-          END LOOP;
-        END IF;
+          overflow := OVERFLOWTABLES(n.transaction_id);
+          IF CQN_HELPER.ISUPDATE(opType) THEN 
+            APPEND(updateRowSet, overflow);
+            hasAllRowsUpdates := TRUE;
+          END IF;
+          IF CQN_HELPER.ISINSERT(opType) THEN 
+            APPEND(insertRowSet, overflow);
+            hasAllRowsInserts := TRUE;
+          END IF;
+          /*  No point doing this one
+          IF CQN_HELPER.ISDELETE(opType) THEN 
+            APPEND(deleteRowSet, overflow);
+            hasAllRowsDeletes := TRUE;
+          END IF;
+          */
+        END IF;          
+      ELSE         
+          IF tableArrays(i).row_desc_array IS NULL THEN 
+            CONTINUE;
+          END IF;
+          IF CQN_HELPER.ISUPDATE(opType) THEN 
+            APPEND(updateRowSet, tableArrays(i).row_desc_array);
+          END IF;
+          IF CQN_HELPER.ISINSERT(opType) THEN 
+            APPEND(insertRowSet, tableArrays(i).row_desc_array);
+          END IF;
+          IF CQN_HELPER.ISDELETE(opType) THEN 
+            APPEND(deleteRowSet, tableArrays(i).row_desc_array);
+          END IF;
       END IF;
     END LOOP;
-    NULL;
+    n.event_type := CQN_HELPER.EVENT_OBJCHANGE;
+    n.table_desc_array := tableArrays;
+    --LOGEVENT('EVENT_OBJCHANGE: u:' || updateRowSet.COUNT || ', i:' || insertRowSet.COUNT || ', d:' || deleteRowSet.COUNT);
+    LOGEVENT(CQN_HELPER.PRINT(n));
+      
   END HANDLE_CHANGE;
 
   FUNCTION BVDECODE(code IN NUMBER) RETURN INT_ARR AS
@@ -900,70 +766,6 @@ TYPE CQ_NOTIFICATION$_ROW IS OBJECT (
 
 
 
-  PROCEDURE LOADCACHES IS
-      spec SPEC_DECODE;
-      idx PLS_INTEGER;
-      d VARCHAR2(64);
-    BEGIN
-       -- clear caches
-      accountCache.DELETE;
-      accountCacheIdx.DELETE;
-      securityCache.DELETE;
-      securityCacheIdx.DELETE;       
-       -- populate accountCache
-      idx := 1;
-      FOR R IN (SELECT ACCOUNT_DISPLAY_NAME, ACCOUNT_ID FROM ACCOUNT) LOOP
-        accountCache(R.ACCOUNT_DISPLAY_NAME) := R.ACCOUNT_ID;
-        accountCacheIdx(idx) := new ACCT_DECODE(R.ACCOUNT_DISPLAY_NAME, R.ACCOUNT_ID);
-        idx := idx + 1;
-      END LOOP;
-      FOR R IN (SELECT * FROM TABLE(TQV.PIPEACCTCACHE)) LOOP
-        d := R.ACCOUNT_DISPLAY_NAME;
-      END LOOP;
-      LOGEVENT('INITIALIZED ACCT CACHE: ' || accountCache.COUNT || ' ACCOUNTS');
-      -- populate security cache
-      idx := 1;
-      FOR R IN (SELECT SECURITY_DISPLAY_NAME, SECURITY_TYPE, SECURITY_ID FROM SECURITY) LOOP
-        spec.SECURITY_ID := R.SECURITY_ID;
-        spec.SECURITY_DISPLAY_NAME := R.SECURITY_DISPLAY_NAME;
-        spec.SECURITY_TYPE := R.SECURITY_TYPE;
-        securityCache(R.SECURITY_DISPLAY_NAME) := spec;
-        securityCacheIdx(idx) := new SEC_DECODE(R.SECURITY_DISPLAY_NAME, R.SECURITY_TYPE, R.SECURITY_ID);
-        idx := idx + 1;
-      END LOOP;
-      FOR R IN (SELECT * FROM TABLE(TQV.PIPESECCACHE)) LOOP
-        d := R.SECURITY_DISPLAY_NAME;
-      END LOOP;
-      LOGEVENT('INITIALIZED SECURITY CACHE: ' || securityCache.COUNT || ' SECURITIES');
-    END LOADCACHES;
 
-  -- *******************************************************
-  --    Load cache procedure
-  -- *******************************************************
-
-  FUNCTION FORCELOADCACHE RETURN VARCHAR2 IS
-    d VARCHAR2(64);
-    s NUMBER := 0;
-    a NUMBER := 0;
-  BEGIN
-      LOADCACHES;
-      FOR R IN (SELECT * FROM TABLE(TQV.PIPESECCACHE)) LOOP
-        d := R.SECURITY_DISPLAY_NAME;
-        s := s+1;
-      END LOOP;
-      FOR R IN (SELECT * FROM TABLE(TQV.PIPEACCTCACHE)) LOOP
-        d := R.ACCOUNT_DISPLAY_NAME;
-        a := a+1;
-      END LOOP;
-      return 'read-secs:' || s || ', read-accts:' || a;
-  END;
-
-  -- *******************************************************
-  --    Package Initialization
-  -- *******************************************************
-
-
-  BEGIN
-    LOADCACHES;
 END TQV;
 /
