@@ -17,7 +17,7 @@ create or replace PACKAGE BODY TQV AS
   
   
   TYPE XROWIDSET IS TABLE OF VARCHAR2(18) INDEX BY VARCHAR2(18);
-  TYPE CHANGE_TABLE_ARR IS TABLE OF XROWIDSET INDEX BY BINARY_INTEGER;
+  TYPE CHANGE_TABLE_ARR IS TABLE OF CQ_NOTIFICATION$_TABLE INDEX BY PLS_INTEGER;
   
   -- =====================================================================
   -- ==== done ====
@@ -592,7 +592,8 @@ create or replace PACKAGE BODY TQV AS
   -- *******************************************************
 
   PROCEDURE HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR) AS
-    tableArrays CQ_NOTIFICATION$_TABLE_ARRAY := CQ_NOTIFICATION$_TABLE_ARRAY();
+    --TYPE CHANGE_TABLE_ARR IS TABLE OF CQ_NOTIFICATION$_TABLE INDEX BY PLS_INTEGER;
+    
     rowids ROWID_ARR := NEW ROWID_ARR();
     rids XROWIDS;
     overflow XROWIDS := NULL;
@@ -609,8 +610,14 @@ create or replace PACKAGE BODY TQV AS
     updateRowSet XROWIDSET;
     deleteRowSet XROWIDSET;
     
-    
+    tableArrays             CHANGE_TABLE_ARR;
+    nonAllRowsTableArrays   CHANGE_TABLE_ARR;
+    allRowsTableArrays      CHANGE_TABLE_ARR;
   
+    idx     PLS_INTEGER := 0;
+    aIdx    PLS_INTEGER := 0;
+    nIdx    PLS_INTEGER := 0;
+    
   BEGIN
     LOGEVENT(CQN_HELPER.PRINT(n));
     IF n IS NULL THEN RETURN; END IF;
@@ -619,18 +626,23 @@ create or replace PACKAGE BODY TQV AS
     -- t(INSERT|UPDATE|DELETE) XROWIDS 
     
     IF n.event_type = CQN_HELPER.EVENT_OBJCHANGE THEN
-      tableArrays := n.table_desc_array;
+      FOR x IN 1..n.table_desc_array.COUNT LOOP
+        idx := idx + 1;
+        tableArrays(idx) := n.table_desc_array(x);
+      END LOOP;
+      n.table_desc_array := null;
     ELSIF n.event_type = CQN_HELPER.EVENT_QUERYCHANGE THEN
-      idx := tableArrays.COUNT;
-      
-      FOR i IN 1..n.query_desc_array.COUNT LOOP        
+      FOR i IN 1..n.query_desc_array.COUNT LOOP
         FOR x IN 1..n.query_desc_array(i).table_desc_array.COUNT LOOP
-          tableArrays.EXTEND();    
-          idx := idx +1;
-          tableArrays(idx) := n.query_desc_array(i).table_desc_array(x);
+          idx := idx + 1;
+          tableArrays(idx) := n.query_desc_array(i).table_desc_array(x);        
         END LOOP;
       END LOOP;
+      n.query_desc_array := null;
     END IF;
+    
+    -- Now all table-changes are in tableArrays
+    
     
     
     FOR i IN 1..tableArrays.LAST LOOP
