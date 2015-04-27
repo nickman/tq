@@ -27,10 +27,22 @@ create or replace PACKAGE TQV AS
       BATCH_TS        TQSTUBOV.BATCH_TS%TYPE
   );
 
+  TYPE QROWID IS RECORD  (
+      XROWID VARCHAR2(18),
+      TQUEUE_ID INT,
+      SECURITY_ID INT,
+      SECURITY_TYPE CHAR(1),
+      ACCOUNT_ID INT
+  );
+
+  TYPE QROWID_ARR IS TABLE OF QROWID;
 
 
 
-  TYPE QROWIDS IS TABLE OF VARCHAR2(18);
+
+  --TYPE QROWIDS IS TABLE OF VARCHAR2(18);
+
+
 
   TYPE TQSTUBVO IS RECORD  (
     TRADE           TQSTUB
@@ -93,7 +105,7 @@ create or replace PACKAGE TQV AS
   -- Locks, selects and returns all the trades for a batch
   FUNCTION STARTBATCH(tqbatch IN OUT TQBATCH) RETURN TQTRADE_ARR;
   -- Updates all rows in the passed trade array
-  PROCEDURE SAVETRADES(trades IN TQTRADE_ARR);
+  PROCEDURE SAVETRADES(trades IN TQTRADE_ARR, batchId IN INT);
   -- Deletes all the stubs for a batch by the passed rowids
   PROCEDURE FINISHBATCH(batchRowids IN XROWIDS);
 
@@ -102,9 +114,9 @@ create or replace PACKAGE TQV AS
   -- Updates the trades in an array of batches
   --PROCEDURE UPDATEBATCHES(batches IN TQBATCH_ARR);
   -- The TQSTUB insert handler, fired when a new trade comes into scope in the TQUEUE table
-  PROCEDURE HANDLE_INSERT(transaction_id IN RAW, ntfnds IN CQ_NOTIFICATION$_DESCRIPTOR);
 
   PROCEDURE HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR);
+
 
 
   -- =============================================================================

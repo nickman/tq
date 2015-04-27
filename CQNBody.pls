@@ -302,38 +302,38 @@ create or replace PACKAGE BODY CQN_HELPER AS
       RETURN EVENT_NAMES(c);
     END IF;
     RETURN NULL;
-  END;  
+  END;
 --
   -- =============================================================
   --  Indicates if the passed opCode mask has UPDATE Ops
   -- =============================================================
   FUNCTION ISUPDATE(opCodes IN BINARY_INTEGER) RETURN BOOLEAN IS
   BEGIN
-    RETURN bitand(opCodes, UPDATEOP) = 0;
+    RETURN bitand(opCodes, UPDATEOP) != 0;
   END ISUPDATE;
 --
   -- =============================================================
   --  Indicates if the passed opCode mask has DELETE Ops
-  -- =============================================================  
+  -- =============================================================
   FUNCTION ISDELETE(opCodes IN BINARY_INTEGER) RETURN BOOLEAN IS
   BEGIN
-    RETURN bitand(opCodes, DELETEOP) = 0;
+    RETURN bitand(opCodes, DELETEOP) != 0;
   END ISDELETE;
 --
   -- =============================================================
   --  Indicates if the passed opCode mask has INSERT Ops
-  -- =============================================================  
+  -- =============================================================
   FUNCTION ISINSERT(opCodes IN BINARY_INTEGER) RETURN BOOLEAN IS
   BEGIN
-    RETURN bitand(opCodes, INSERTOP) = 0;
+    RETURN bitand(opCodes, INSERTOP) != 0;
   END ISINSERT;
 --
   -- =============================================================
   --  Indicates if the passed opCode mask has an overflow Op
-  -- =============================================================  
+  -- =============================================================
   FUNCTION ISALLROWS(opCodes IN BINARY_INTEGER) RETURN BOOLEAN IS
   BEGIN
-    RETURN bitand(opCodes, ALL_ROWS) = 0;
+    RETURN bitand(opCodes, ALL_ROWS) != 0;
   END ISALLROWS;
 
 --
@@ -347,7 +347,7 @@ create or replace PACKAGE BODY CQN_HELPER AS
       RETURN '';
     END IF;
     FOR i in 1..strs.COUNT LOOP
-      IF(i > 1) THEN 
+      IF(i > 1) THEN
         s := s || ', ';
       END IF;
       s := s || strs(i);
@@ -363,23 +363,24 @@ create or replace PACKAGE BODY CQN_HELPER AS
     t CQ_NOTIFICATION$_TABLE;
     allRowCount NUMBER := -1;
   BEGIN
-    IF n IS NULL THEN 
-      RETURN 'NULL CQ'; 
+    IF n IS NULL THEN
+      RETURN 'NULL CQ';
     END IF;
     s := s || 'regid:' || n.registration_id || ', XID:' || n.transaction_id || ', dbname:' || n.dbname || ', event:' || DECODE_EVENT(n.event_type);
     IF n.event_type = EVENT_OBJCHANGE THEN
       s := s || ', numtables:' || n.numtables;
       t := n.table_desc_array(1);
     ELSIF n.event_type = EVENT_QUERYCHANGE THEN
-      s := s || ', qid:' || n.query_desc_array(1).queryid || ', qop:' || FLAT(DECODE_OP(n.query_desc_array(1).queryop));
+      s := s || ', qid:' || n.query_desc_array(1).queryid || ', qop:' 
+          || FLAT(DECODE_OP(n.query_desc_array(1).queryop));
       t := n.query_desc_array(1).table_desc_array(1);
     END IF;
     s := s || ', tops:' || FLAT(DECODE_OP(t.opflags)) || ', table:' || t.table_name;
     IF t.numrows IS NULL THEN
       s := s || ', rows: ';
-      EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM ' || t.table_name INTO allRowCount;
+      EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM ' || t.table_name || ' WHERE XID = :1' INTO allRowCount USING n.transaction_id;
       s := s || allRowCount ||  ' (ALL)';
-    ELSE 
+    ELSE
       s := s || ', rows: ' || t.numrows;
     END IF;
     return s;

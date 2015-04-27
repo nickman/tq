@@ -14,11 +14,18 @@ create or replace PACKAGE BODY TQV AS
   -- =====================================================================
   -- These are temp for testing
   -- =====================================================================
-  
-  
+
+
   TYPE XROWIDSET IS TABLE OF VARCHAR2(18) INDEX BY VARCHAR2(18);
   TYPE CHANGE_TABLE_ARR IS TABLE OF CQ_NOTIFICATION$_TABLE INDEX BY PLS_INTEGER;
-  
+  TYPE SEC_DECODE_CACHE IS TABLE OF SEC_DECODE INDEX BY SECURITY.SECURITY_DISPLAY_NAME%TYPE;
+  TYPE ACCT_DECODE_CACHE IS TABLE OF ACCOUNT.ACCOUNT_ID%TYPE INDEX BY ACCOUNT.ACCOUNT_DISPLAY_NAME%TYPE;
+
+
+  TYPE XIDCUR IS REF CURSOR RETURN QROWID;
+
+
+
   -- =====================================================================
   -- ==== done ====
   -- =====================================================================
@@ -82,27 +89,27 @@ create or replace PACKAGE BODY TQV AS
   -- *******************************************************
   --    Sorts the TQSTUBs in a batch by TQ ID
   -- *******************************************************
-  PROCEDURE SORTTRADEARR(tqb IN OUT TQBATCH, STUBS IN TQSTUB_ARR) IS
+  PROCEDURE SORTTRADEARR(tqb IN OUT TQBATCH, tqStubs IN TQSTUB_ARR) IS
     fTx INT := 0;
     lTx INT := 0;
     sortedStubs TQSTUB_ARR;
     rowids XROWIDS;
   CURSOR tQByID IS
     SELECT VALUE(T), T.XROWID
-      FROM TABLE(STUBS) T ORDER BY T.TQUEUE_ID;
+      FROM TABLE(tqStubs) T ORDER BY T.TQUEUE_ID;
 
    BEGIN
-      IF (STUBS.COUNT = 0) THEN
+      IF (tqStubs.COUNT = 0) THEN
       tqb.FIRST_T := -1;
       tqb.LAST_T := -1;
-      tqb.TRADES := STUBS;
+      tqb.STUBS := tqStubs;
     ELSE
       OPEN tQByID;
         FETCH tQByID BULK COLLECT INTO sortedStubs, rowids;
       CLOSE tQByID;
       tqb.FIRST_T := sortedStubs(1).TQUEUE_ID;
-      tqb.LAST_T := sortedStubs(STUBS.COUNT).TQUEUE_ID;
-      tqb.TRADES := sortedStubs;
+      tqb.LAST_T := sortedStubs(tqStubs.COUNT).TQUEUE_ID;
+      tqb.STUBS:= sortedStubs;
       tqb.ROWIDS := rowids;
     END IF;
   END;
@@ -159,7 +166,7 @@ create or replace PACKAGE BODY TQV AS
             currentPosAcctId := T.ACCOUNT_ID;
           END IF;
           -- Now flush the single P trade
-          PIPE ROW (new TQBATCH(ACCOUNT => currentPosAcctId, TCOUNT => 1, FIRST_T => T.TQUEUE_ID, LAST_T => T.TQUEUE_ID, BATCH_ID => NEXTBATCHID, ROWIDS => new XROWIDS(T.XROWID), TRADES => new TQSTUB_ARR(T)));
+          PIPE ROW (new TQBATCH(ACCOUNT => currentPosAcctId, TCOUNT => 1, FIRST_T => T.TQUEUE_ID, LAST_T => T.TQUEUE_ID, BATCH_ID => NEXTBATCHID, ROWIDS => new XROWIDS(T.XROWID), STUBS => new TQSTUB_ARR(T)));
           tcount := 0;
           currentTradeArr := new TQSTUB_ARR();
           currentPosAcctId := T.ACCOUNT_ID;
@@ -328,7 +335,7 @@ create or replace PACKAGE BODY TQV AS
         UPDATE TQSTUBS SET BATCH_ID = batch.BATCH_ID, BATCH_TS = now
         WHERE ROWID = CHARTOROWID(lockedStubs(i).XROWID);
     COMMIT;
-    batch.TRADES := lockedStubs;
+    batch.STUBS := lockedStubs;
   END LOCKBATCH;
 --
   -- *******************************************************
@@ -343,125 +350,6 @@ create or replace PACKAGE BODY TQV AS
       LOCKBATCH(batch);
     END LOOP;
   END LOCKBATCHES;
---
-  -- *******************************************************
-  --    Updates all rows in the passed batch
-  -- *******************************************************
-  /*
-  PROCEDURE UPDATEBATCH(batch IN TQBATCH) IS
-  BEGIN
-    FORALL i IN 1..batch.TRADES.COUNT
-      UPDATE TQUEUE SET
-        STATUS_CODE = batch.TRADES(i).STATUS_CODE,
-        SECURITY_DISPLAY_NAME = batch.TRADES(i).SECURITY_DISPLAY_NAME,
-        ACCOUNT_DISPLAY_NAME = batch.TRADES(i).ACCOUNT_DISPLAY_NAME,
-        SECURITY_ID = batch.TRADES(i).SECURITY_ID,
-        SECURITY_TYPE = batch.TRADES(i).SECURITY_TYPE,
-        ACCOUNT_ID = batch.TRADES(i).ACCOUNT_ID,
-        BATCH_ID = batch.TRADES(i).BATCH_ID,
-        CREATE_TS = batch.TRADES(i).CREATE_TS,
-        UPDATE_TS = batch.TRADES(i).UPDATE_TS,
-        ERROR_MESSAGE = batch.TRADES(i).ERROR_MESSAGE
-      WHERE ROWID = CHARTOROWID(batch.TRADES(i).XROWID);
-      -- WHERE TQUEUE_ID = batch.TRADES(i).TQUEUE_ID;
-
-  END UPDATEBATCH;
-  */
---
-  -- *******************************************************
-  --    Updates all rows in all passed batches
-  -- *******************************************************
-/*
-  PROCEDURE UPDATEBATCHES(batches IN TQBATCH_ARR) IS
-  BEGIN
-    FORALL i IN 1..batches.COUNT
-      EXECUTE IMMEDIATE 'BEGIN TQV.UPDATEBATCH(:1); END;' USING IN batches(i);
-  END UPDATEBATCHES;
-*/
-
---
-  -- *******************************************************
-  --    Handles INSERT Query notifications
-  -- *******************************************************
---  FIXME:  this can be optimized !!
-  PROCEDURE HANDLE_INSERT(transaction_id RAW, ntfnds CQ_NOTIFICATION$_DESCRIPTOR) IS
-    secids INT_ARR := new INT_ARR();
-    actids INT_ARR := new INT_ARR();
-    tqids INT_ARR := new INT_ARR();
-    sectypes CHAR_ARR := new CHAR_ARR();
-    rowids XROWIDS;
-
-    numrows NUMBER := 0;
-    row_desc_array CQ_NOTIFICATION$_ROW_ARRAY;
-    operation_type  NUMBER;
-    event_type      NUMBER;
-    stubs TQSTUB_ARR;
-  BEGIN
-    event_type := ntfnds.event_type;
-    IF (event_type = DBMS_CQ_NOTIFICATION.EVENT_OBJCHANGE) THEN
-      operation_type := ntfnds.table_desc_array(1).Opflags;
-    ELSE
-      operation_type := ntfnds.query_desc_array(1).table_desc_array(1).Opflags;
-    END IF;
-
-    IF (bitand(operation_type, DBMS_CQ_NOTIFICATION.ALL_ROWS) = 0) THEN
-      -- We have rows
-      IF (event_type = DBMS_CQ_NOTIFICATION.EVENT_OBJCHANGE) THEN
-        LOGEVENT('HandleInserts: EVENT_OBJCHANGE');
-        row_desc_array := ntfnds.table_desc_array(1).row_desc_array;
-      ELSIF (event_type = DBMS_CQ_NOTIFICATION.EVENT_QUERYCHANGE) THEN
-        LOGEVENT('HandleInserts: EVENT_QUERYCHANGE');
-        row_desc_array := ntfnds.query_desc_array(1).table_desc_array(1).row_desc_array;
-      ELSE
-        LOGEVENT('HandleInserts: Unsupported Event Type:' || event_type);
-      END IF;
-    ELSE
-      -- batch was too big. Need to read from TQXIDS
-      LOGEVENT('HandleInserts: Batch Overflow on TX:' || ntfnds.transaction_id);
-      SELECT SYS.CHNF$_RDESC(0, ROWID) BULK COLLECT INTO row_desc_array FROM TQUEUE WHERE XID = ntfnds.transaction_id;
-      LOGEVENT('HandleInserts: Retrieved Overflow:' || row_desc_array.COUNT);
-    END IF;
-
-    IF ( row_desc_array IS NULL ) THEN
-      LOGEVENT('HandleInserts: FOUND NO ROWS');
-      RETURN;
-    END IF;
-    SELECT row_id BULK COLLECT INTO rowids FROM TABLE(row_desc_array);
-    --LOGEVENT('HandleInserts: FOUND ROWS:' || row_desc_array.COUNT);
-
-    SELECT TQSTUB(NULL, ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, transaction_id, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, -1 , NULL )
-    BULK COLLECT INTO stubs
-    FROM TQUEUE T, ACCOUNT A, SECURITY S
-    WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
-    AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
-    AND T.ROWID IN (
-      (SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rowids))
-    );
-
-    FORALL i in stubs.FIRST..stubs.LAST
-      INSERT INTO TQSTUBS (TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS)
-      VALUES(
-        stubs(i).TQROWID,
-        stubs(i).TQUEUE_ID,
-        stubs(i).XID,
-        stubs(i).SECURITY_ID,
-        stubs(i).SECURITY_TYPE,
-        stubs(i).ACCOUNT_ID,
-        stubs(i).BATCH_ID,
-        stubs(i).BATCH_TS
-      );
-        COMMIT;
-    --LOGEVENT('HANDLED INSERT EVENTS: '|| numrows);
-    EXCEPTION WHEN OTHERS THEN
-      DECLARE
-        errm VARCHAR2(2000) := SQLERRM;
-        errc NUMBER := SQLCODE;
-
-      BEGIN
-        LOGEVENT( errm || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
-      END;
-  END HANDLE_INSERT;
-
 
 
   -- *******************************************************
@@ -488,7 +376,7 @@ create or replace PACKAGE BODY TQV AS
     WHERE ROWID IN (
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
     ) FOR UPDATE SKIP LOCKED;
-    batch.TRADES := lockedStubs;
+    batch.STUBS := lockedStubs;
   END RELOCKBATCH;
 
   -- *******************************************************
@@ -497,44 +385,187 @@ create or replace PACKAGE BODY TQV AS
 
   FUNCTION STARTBATCH(tqbatch IN OUT TQBATCH) RETURN TQTRADE_ARR AS
     trades TQTRADE_ARR;
-    rids XROWIDS := tqbatch.TXIDS;
-    -- BATCH_HAS_LOCKED_ROWS EXCEPTION;
-    -- PRAGMA EXCEPTION_INIT(BATCH_HAS_LOCKED_ROWS, -54);
+    lockedTrades TQTRADE_ARR;
+    droppedTrades TQTRADE_ARR;
+    tradeRowIds XROWIDS := tqbatch.TXIDS;
+    stubRowIds XROWIDS := tqbatch.XIDS;
+    lockedRids XROWIDS;
+    locked int := 0;
+    dropped int := 0;
+    BATCH_HAS_LOCKED_ROWS EXCEPTION;
+    PRAGMA EXCEPTION_INIT(BATCH_HAS_LOCKED_ROWS, -54);
+
+    stubRowids XROWIDS;
+    updatedStubs TQSTUB_ARR;
+    droppedStubs TQSTUB_ARR;
+
   BEGIN
+    /*
     SELECT TQTRADE(ROWIDTOCHAR(ROWID), TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE)
     BULK COLLECT INTO trades
     FROM TQUEUE T
     WHERE ROWID IN (
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rids)
     )
-    FOR UPDATE SKIP LOCKED;
+    LOGEVENT('Processing Batch: [' || tqbatch.trades.COUNT || '] Stubs');
+
+    SELECT ACCT_DECODE(A.ACCOUNT_DISPLAY_NAME, A.ACCOUNT_ID) BULK COLLECT INTO accts
+      FROM ACCOUNT A, TQSTUBS T
+      WHERE A.ACCOUNT_ID = T.ACCOUNT_ID
+      AND EXISTS (
+        SELECT RID FROM (
+          SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(stubRowIds) X
+        ) WHERE RID = T.ROWID
+      );
+      LOGEVENT('CACHED [' || accts.COUNT || '] ACCT_DECODES');
+
+
+
+    SELECT SEC_DECODE(S.SECURITY_DISPLAY_NAME, S.SECURITY_TYPE, S.SECURITY_ID) BULK COLLECT INTO secs
+      FROM SECURITY S, TQSTUBS T
+      WHERE S.SECURITY_ID = T.SECURITY_ID
+      AND EXISTS (
+        SELECT RID FROM (
+          SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(stubRowIds) X
+        ) WHERE RID = T.ROWID
+      );
+    LOGEVENT('CACHED [' || secs.COUNT || '] SEC_DECODES');
+
+    */
+
+
+    -- First populate the trade ref fields with no locking
+    SELECT TQTRADE(ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, T.XID, T.STATUS_CODE, T.SECURITY_DISPLAY_NAME, T.ACCOUNT_DISPLAY_NAME,
+      S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID,
+      tqbatch.BATCH_ID, T.CREATE_TS, T.UPDATE_TS, T.ERROR_MESSAGE)
+    BULK COLLECT INTO trades
+    FROM TQUEUE T, ACCOUNT A, SECURITY S
+    WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
+    AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
+    AND EXISTS (
+      SELECT RID FROM (
+        SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(tradeRowIds) X
+      ) WHERE RID = T.ROWID
+    );
+    LOGEVENT('BATCH TRADES ACQUIRED: [' || trades.COUNT || '] Trades');
+    -- Now try to lock all of them
+    SELECT ROWIDTOCHAR(ROWID)
+      BULK COLLECT INTO lockedRids
+      FROM TQUEUE T
+      WHERE EXISTS (
+        SELECT RID FROM (
+          SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(tradeRowIds) X
+        ) WHERE RID = T.ROWID
+      ) FOR UPDATE NOWAIT;
+      LOGEVENT('BATCH LOCKED [' || lockedRids.COUNT || '] TQUEUE TRADES');
+    -- If we get here, we're good.
+    --tqbatch.UPDATE_TRADES(trades, droppedTrades);
+    RETURN trades;
+      -- otherwise, we got a lock failure.
+      EXCEPTION WHEN BATCH_HAS_LOCKED_ROWS THEN
+        BEGIN
+          LOGEVENT('BATCH LOCK FAILED');
+          -- Rebuild batch out of lockable trades only
+          SELECT ROWIDTOCHAR(ROWID)
+            BULK COLLECT INTO lockedRids
+            FROM TQUEUE T
+            WHERE EXISTS (
+              SELECT RID FROM (
+                SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(tradeRowIds) X
+              ) WHERE RID = T.ROWID
+            ) FOR UPDATE SKIP LOCKED;
+          LOGEVENT('SINGLE LOCKED [' || lockedRids.COUNT || '] TQUEUE TRADES');
+          -- Remove any trade in *trades* where the XROWID is not in *lockedRids*
+          --batch->TQSTUB->TQROWID
+          SELECT VALUE(T) BULK COLLECT INTO lockedTrades FROM TABLE(CAST(trades as TQTRADE_ARR)) T
+          WHERE XROWID IN (
+              SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
+          );
+          SELECT VALUE(T) BULK COLLECT INTO droppedTrades FROM TABLE(CAST(trades as TQTRADE_ARR)) T
+          WHERE XROWID NOT IN (
+              SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
+          );
+
+          /*
+  ROWIDS            XROWIDS,
+  TRADES            TQSTUB_ARR,
+
+    stubRowids XROWIDS;
+    updatedStubs TQSTUB_ARR;
+
+          */
+
+          SELECT VALUE(T) BULK COLLECT INTO updatedStubs FROM TABLE(CAST(tqbatch.STUBS as TQSTUB_ARR)) T
+          WHERE T.TQROWID IN (
+            SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
+          );
+          SELECT VALUE(T) BULK COLLECT INTO droppedStubs FROM TABLE(CAST(tqbatch.STUBS as TQSTUB_ARR)) T
+          WHERE T.TQROWID NOT IN (
+            SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
+          );
+
+          tqbatch.STUBS := updatedStubs;
+          tqbatch.ROWIDS := NULL;
+          tqbatch.SETXIDS;          
+
+          IF droppedStubs IS NOT NULL AND droppedStubs.COUNT > 0 THEN
+            FORALL i in 1..droppedStubs.COUNT
+              UPDATE TQSTUBS SET BATCH_ID = -1, BATCH_TS = NULL
+                WHERE ROWID = CHARTOROWID(droppedStubs(i).XROWID);
+          END IF;
+
+
+          --tqbatch.UPDATE_TRADES(lockedTrades, droppedTrades);
+          IF lockedTrades IS NOT NULL THEN
+            locked := lockedTrades.COUNT;
+          ELSE
+            locked := 0;
+          END IF;
+          IF droppedTrades IS NOT NULL THEN
+            dropped := droppedTrades.COUNT;
+          ELSE
+            dropped := 0;
+          END IF;
+
+          LOGEVENT('SINGLE LOCK RESULTS:  locked:[' || locked || '], dropped:[' || dropped || ']');
+          RETURN lockedTrades;
+        END;
+      WHEN OTHERS THEN
+        DECLARE
+          errm VARCHAR2(2000) := SQLERRM;
+          errc NUMBER := SQLCODE;
+        BEGIN
+          LOGEVENT('STARTBATCH ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+          RAISE;
+        END;
+
+    --FOR UPDATE SKIP LOCKED;
     --tqbatch-->TRADES --> TQUEUE_ID
     --TRADES.TQSTUB.TQUEUE_ID
-    RETURN trades;
+
+
   END STARTBATCH;
 --
   -- *******************************************************
   --    Updates all rows in TQUEUE from the passed trade array
   -- *******************************************************
 
-  PROCEDURE SAVETRADES(trades IN TQTRADE_ARR) AS
+  PROCEDURE SAVETRADES(trades IN TQTRADE_ARR, batchId IN INT) AS
     tr TQTRADE_ARR := trades;
   BEGIN
+    LOGEVENT('UPDATING :[' || trades.COUNT || '] TRADES.....');
     FORALL i IN 1..tr.COUNT
       UPDATE TQUEUE SET
+        BATCH_ID = tr(i).BATCH_ID,
+        ACCOUNT_ID = tr(i).ACCOUNT_ID,
+        SECURITY_ID = tr(i).SECURITY_ID,
+        SECURITY_TYPE = tr(i).SECURITY_TYPE,
         STATUS_CODE = tr(i).STATUS_CODE,
         UPDATE_TS = tr(i).UPDATE_TS,
         ERROR_MESSAGE = tr(i).ERROR_MESSAGE
       WHERE ROWID = CHARTOROWID(tr(i).XROWID);
+      LOGEVENT('SAVETRADES: sub:[' || trades.COUNT || '], upd:[' || SQL%ROWCOUNT || ']');
   END SAVETRADES;
-
-  /*
-      !!!!!   
-        Need to put independent logger in CQN CALLBACK.
-      !!!!!
-  
-  */
-
 
 --
   -- *******************************************************
@@ -548,43 +579,116 @@ create or replace PACKAGE BODY TQV AS
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rids)
     );
   END FINISHBATCH;
-  
-  FUNCTION OVERFLOW(txid IN RAW) RETURN XROWIDS IS
-    rids XROWIDS;
+
+--
+  -- *******************************************************
+  --    Creates a pipeline of all row ROWIDs in TQUEUE
+  --    for the given transaction id
+  -- *******************************************************
+  -- TYPE XIDCUR IS REF CURSOR RETURN VARCHAR2;
+  FUNCTION ROWSFORXID(p IN XIDCUR) RETURN QROWID_ARR PIPELINED PARALLEL_ENABLE IS   -- ( PARTITION p BY RANGE(XROWID))
+    xrid QROWID;
   BEGIN
-      -- batch was too big. Need to read from TQXIDS
-      LOGEVENT('HandleInserts: Batch Overflow on TX:' || txid);
-      SELECT ROWIDTOCHAR(ROWID) BULK COLLECT INTO rids FROM TQUEUE WHERE XID = txid; 
-      RETURN rids;
-  END OVERFLOW;
-  
-  -- SELECT SYS.CHNF$_RDESC(0, ROWID) BULK COLLECT INTO row_desc_array FROM TQUEUE WHERE XID = ntfnds.transaction_id;
-  
-  FUNCTION OVERFLOWTABLES(txid IN RAW) RETURN XROWIDS IS
-    rids XROWIDS;
-  BEGIN
-    SELECT ROWIDTOCHAR(ROWID) BULK COLLECT INTO rids FROM TQUEUE WHERE XID = txid; 
-    RETURN rids;
-  END OVERFLOWTABLES;
-  
-  PROCEDURE APPEND(rowidset IN OUT XROWIDSET, t IN CQ_NOTIFICATION$_ROW_ARRAY) IS
-    rid VARCHAR2(18);
-  BEGIN
-    FOR i IN 1..t.LAST LOOP
-      rid := t(i).row_id;
-      rowidset(rid) := rid;
+    LOOP
+      FETCH p INTO xrid;
+      EXIT WHEN p%NOTFOUND;
+      PIPE ROW(xrid);
     END LOOP;
-  END APPEND;
-  
-  PROCEDURE APPEND(rowidset IN OUT XROWIDSET, t IN XROWIDS) IS
-    rid VARCHAR2(18);
+    RETURN;
+    EXCEPTION
+      WHEN NO_DATA_NEEDED THEN
+        BEGIN LOGEVENT('ROWSFORXID >>> CLEAN UP'); END;
+        RETURN;
+  END ROWSFORXID;
+    /*
+  TYPE QROWID IS RECORD  (
+      XROWID VARCHAR2(18),
+      TQUEUE_ID INT,
+      SECURITY_ID INT,
+      SECURITY_TYPE CHAR(1),
+      ACCOUNT_ID INT
+  );
+  TYPE QROWID_ARR IS TABLE OF QROWID;
+  */
+--
+  -- *******************************************************
+  --    Handle INSERT ALL_ROWS  events
+  -- *******************************************************
+
+  PROCEDURE HANDLE_INSERT(txid IN RAW) IS
   BEGIN
-    FOR i IN 1..t.LAST LOOP
-      rid := t(i);
-      rowidset(rid) := rid;
-    END LOOP;
-  END APPEND;
-  
+    INSERT INTO TQSTUBS (TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID, BATCH_ID)
+      SELECT ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, txid, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, -1
+      FROM TQUEUE T, ACCOUNT A, SECURITY S
+      WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
+      AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
+      AND XID = txid
+      AND STATUS_CODE IN ('PENDING', 'RETRY', 'ENRICH')
+        AND NOT EXISTS (
+          SELECT * FROM TQSTUBS X WHERE X.TQROWID = T.ROWID
+        );
+  END HANDLE_INSERT;
+
+  PROCEDURE HANDLE_INSERT(txid IN RAW, rowids IN CQ_NOTIFICATION$_TABLE) IS
+  BEGIN
+    FORALL i in 1..rowids.row_desc_array.COUNT
+      INSERT INTO TQSTUBS (TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID, BATCH_ID)
+        SELECT ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, txid, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, -1
+        FROM TQUEUE T, ACCOUNT A, SECURITY S
+        WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
+        AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
+        AND T.ROWID = rowids.row_desc_array(i).row_id
+        AND XID = txid
+        AND STATUS_CODE IN ('PENDING', 'RETRY', 'ENRICH');
+  END HANDLE_INSERT;
+
+
+  --CQ_NOTIFICATION$_TABLE   CQ_NOTIFICATION$_TABLE.row_desc_array(x).row_id
+
+  PROCEDURE HANDLE_UPDATE(txid IN RAW, rowids IN CQ_NOTIFICATION$_TABLE, batchId IN NUMBER) IS
+  BEGIN
+
+    FORALL i in 1..rowids.row_desc_array.COUNT
+      INSERT INTO TQSTUBS (TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID, BATCH_ID)
+        SELECT ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, txid, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, batchId
+        FROM TQUEUE T, ACCOUNT A, SECURITY S
+        WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
+        AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
+        AND T.ROWID = rowids.row_desc_array(i).row_id
+        AND XID = txid
+        AND STATUS_CODE IN ('PENDING', 'RETRY', 'ENRICH')
+        AND NOT EXISTS (
+          SELECT * FROM TQSTUBS X WHERE X.TQROWID = T.ROWID
+        );
+  END HANDLE_UPDATE;
+
+  PROCEDURE HANDLE_DELETE(rowids IN CQ_NOTIFICATION$_TABLE, batchId IN NUMBER) IS
+  BEGIN
+    FORALL i in 1..rowids.row_desc_array.COUNT
+      DELETE FROM TQSTUBS WHERE TQROWID = rowids.row_desc_array(i).row_id;
+  END HANDLE_DELETE;
+
+
+
+--
+  -- *******************************************************
+  --    Handle UPDATE ALL_ROWS  events
+  -- *******************************************************
+
+  PROCEDURE HANDLE_UPDATE(txid IN RAW, batchId IN NUMBER) IS
+  BEGIN
+    INSERT INTO TQSTUBS (TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID, BATCH_ID)
+      SELECT ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, txid, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, batchId
+      FROM TQUEUE T, ACCOUNT A, SECURITY S
+      WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME
+      AND T.SECURITY_DISPLAY_NAME = S.SECURITY_DISPLAY_NAME
+      AND XID = txid
+      AND STATUS_CODE IN ('PENDING', 'RETRY', 'ENRICH')
+      AND NOT EXISTS (
+        SELECT * FROM TQSTUBS X WHERE X.TQROWID = T.ROWID
+      );
+  END HANDLE_UPDATE;
+
 
 --
   -- *******************************************************
@@ -593,38 +697,39 @@ create or replace PACKAGE BODY TQV AS
 
   PROCEDURE HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR) AS
     --TYPE CHANGE_TABLE_ARR IS TABLE OF CQ_NOTIFICATION$_TABLE INDEX BY PLS_INTEGER;
-    
+
     rowids ROWID_ARR := NEW ROWID_ARR();
     rids XROWIDS;
     overflow XROWIDS := NULL;
     opKeys VARCHAR2_ARR;
     opKeyTab CQ_NOTIFICATION$_TABLE;
-    idx PLS_INTEGER;
     opType BINARY_INTEGER;
-    
+
+
+    currentTChange    CQ_NOTIFICATION$_TABLE := NULL;
+
+    hasAllRows        BOOLEAN := FALSE;
     hasAllRowsInserts BOOLEAN := FALSE;
     hasAllRowsUpdates BOOLEAN := FALSE;
     hasAllRowsDeletes BOOLEAN := FALSE;
-    
-    insertRowSet XROWIDSET;
-    updateRowSet XROWIDSET;
-    deleteRowSet XROWIDSET;
-    
+    recordedCurrent   BOOLEAN := FALSE;
+
+
     tableArrays             CHANGE_TABLE_ARR;
-    nonAllRowsTableArrays   CHANGE_TABLE_ARR;
     allRowsTableArrays      CHANGE_TABLE_ARR;
-  
-    idx     PLS_INTEGER := 0;
-    aIdx    PLS_INTEGER := 0;
-    nIdx    PLS_INTEGER := 0;
-    
+
+    idx           PLS_INTEGER := 0;
+    aIdx          PLS_INTEGER := 0;
+
+    batchId       NUMBER := NULL;
+
   BEGIN
     LOGEVENT(CQN_HELPER.PRINT(n));
     IF n IS NULL THEN RETURN; END IF;
-    -- Loop through all table arrays 
+    -- Loop through all table arrays
     -- For each table array, map the ROWIDs into all applicable
-    -- t(INSERT|UPDATE|DELETE) XROWIDS 
-    
+    -- t(INSERT|UPDATE|DELETE) XROWIDS
+
     IF n.event_type = CQN_HELPER.EVENT_OBJCHANGE THEN
       FOR x IN 1..n.table_desc_array.COUNT LOOP
         idx := idx + 1;
@@ -635,56 +740,78 @@ create or replace PACKAGE BODY TQV AS
       FOR i IN 1..n.query_desc_array.COUNT LOOP
         FOR x IN 1..n.query_desc_array(i).table_desc_array.COUNT LOOP
           idx := idx + 1;
-          tableArrays(idx) := n.query_desc_array(i).table_desc_array(x);        
+          tableArrays(idx) := n.query_desc_array(i).table_desc_array(x);
         END LOOP;
       END LOOP;
       n.query_desc_array := null;
     END IF;
-    
+
     -- Now all table-changes are in tableArrays
-    
-    
-    
-    FOR i IN 1..tableArrays.LAST LOOP
-      opType := tableArrays(i).opflags;
-      IF CQN_HELPER.ISALLROWS(opType) THEN
-        IF( overflow IS NULL ) THEN
-          overflow := OVERFLOWTABLES(n.transaction_id);
-          IF CQN_HELPER.ISUPDATE(opType) THEN 
-            APPEND(updateRowSet, overflow);
-            hasAllRowsUpdates := TRUE;
+    LOGEVENT('tableArrays.COUNT:' || tableArrays.COUNT);
+    FOR i in 1..tableArrays.COUNT LOOP
+      currentTChange := tableArrays(i);
+      recordedCurrent := FALSE;
+      IF CQN_HELPER.ISALLROWS(currentTChange.opflags) THEN
+        LOGEVENT('tableArrays(' || i || ')---> [' || currentTChange.opflags || '] IS ALLROWS');
+        -- ***********************************************************
+        --    Events with NO ROWIDS (ALL_ROWS)
+        -- ***********************************************************
+        IF CQN_HELPER.ISUPDATE(currentTChange.opflags) THEN
+          hasAllRowsUpdates := TRUE;
+          hasAllRows := TRUE;
+          aIdx := aIdx + 1;
+          allRowsTableArrays(aIdx) := currentTChange;
+          recordedCurrent := TRUE;
+        END IF;
+
+        IF CQN_HELPER.ISINSERT(currentTChange.opflags) THEN
+          hasAllRowsInserts := TRUE;
+          hasAllRows := TRUE;
+          IF recordedCurrent = FALSE THEN
+            aIdx := aIdx + 1;
+            allRowsTableArrays(aIdx) := currentTChange;
           END IF;
-          IF CQN_HELPER.ISINSERT(opType) THEN 
-            APPEND(insertRowSet, overflow);
-            hasAllRowsInserts := TRUE;
-          END IF;
-          /*  No point doing this one
-          IF CQN_HELPER.ISDELETE(opType) THEN 
-            APPEND(deleteRowSet, overflow);
-            hasAllRowsDeletes := TRUE;
-          END IF;
-          */
-        END IF;          
-      ELSE         
-          IF tableArrays(i).row_desc_array IS NULL THEN 
-            CONTINUE;
-          END IF;
-          IF CQN_HELPER.ISUPDATE(opType) THEN 
-            APPEND(updateRowSet, tableArrays(i).row_desc_array);
-          END IF;
-          IF CQN_HELPER.ISINSERT(opType) THEN 
-            APPEND(insertRowSet, tableArrays(i).row_desc_array);
-          END IF;
-          IF CQN_HELPER.ISDELETE(opType) THEN 
-            APPEND(deleteRowSet, tableArrays(i).row_desc_array);
-          END IF;
+
+        END IF;
+
+        IF CQN_HELPER.ISDELETE(currentTChange.opflags) THEN
+          hasAllRowsDeletes := TRUE;
+        END IF;
+
+      ELSE
+        -- ***********************************************************
+        --    Events with specified ROWIDS
+        -- ***********************************************************
+        IF CQN_HELPER.ISUPDATE(currentTChange.opflags) THEN
+          IF batchId IS NULL THEN SELECT SEQ_BATCH_ID.NEXTVAL INTO batchId FROM DUAL; END IF;
+          HANDLE_UPDATE(n.transaction_id, currentTChange, batchId);
+        END IF;
+
+        IF CQN_HELPER.ISINSERT(currentTChange.opflags) THEN
+          IF batchId IS NULL THEN SELECT SEQ_BATCH_ID.NEXTVAL INTO batchId FROM DUAL; END IF;
+          HANDLE_INSERT(n.transaction_id, currentTChange);
+        END IF;
+
+        IF CQN_HELPER.ISDELETE(currentTChange.opflags) THEN
+          IF batchId IS NULL THEN SELECT SEQ_BATCH_ID.NEXTVAL INTO batchId FROM DUAL; END IF;
+          HANDLE_DELETE(currentTChange, batchId);
+        END IF;
+
       END IF;
+      tableArrays(i) := NULL;
     END LOOP;
-    n.event_type := CQN_HELPER.EVENT_OBJCHANGE;
-    n.table_desc_array := tableArrays;
-    --LOGEVENT('EVENT_OBJCHANGE: u:' || updateRowSet.COUNT || ', i:' || insertRowSet.COUNT || ', d:' || deleteRowSet.COUNT);
-    LOGEVENT(CQN_HELPER.PRINT(n));
-      
+    batchId := -1;
+    IF hasAllRows THEN
+      IF hasAllRowsInserts THEN
+        IF batchId IS NULL THEN SELECT SEQ_BATCH_ID.NEXTVAL INTO batchId FROM DUAL; END IF;
+        HANDLE_INSERT(n.transaction_id);
+      END IF;
+      IF hasAllRowsUpdates THEN
+        IF batchId IS NULL THEN SELECT SEQ_BATCH_ID.NEXTVAL INTO batchId FROM DUAL; END IF;
+        HANDLE_UPDATE(n.transaction_id, batchId);
+      END IF;
+
+    END IF;
   END HANDLE_CHANGE;
 
   FUNCTION BVDECODE(code IN NUMBER) RETURN INT_ARR AS
@@ -692,31 +819,31 @@ create or replace PACKAGE BODY TQV AS
     -- TODO: Implementation required for FUNCTION TQV.BVDECODE
     RETURN NULL;
   END BVDECODE;
-  
-  
+
+
   -- NOTES
   /*
-  
+
   NEED SUSPEND/RESUME for OLTP PURGE
-  
-  2015-04-23 11:24:21 CQ NOTIF ||:regid:140, XID:0A001E00E6D20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:77, 
+
+  2015-04-23 11:24:21 CQ NOTIF ||:regid:140, XID:0A001E00E6D20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:77,
     qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:UPDATEOP, table:TQREACTOR.TQUEUE, rows: 99
 
-2015-04-23 11:23:59 CQ NOTIF ||:regid:140, XID:0A000300ADD20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:77, 
+2015-04-23 11:23:59 CQ NOTIF ||:regid:140, XID:0A000300ADD20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:77,
     qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:DELETEOP, table:TQREACTOR.TQUEUE, rows: 99
 
-2015-04-23 11:19:15 CQ NOTIF ||:regid:139, XID:0200190038AE0100, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+2015-04-23 11:19:15 CQ NOTIF ||:regid:139, XID:0200190038AE0100, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76,
     qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:UPDATEOP, table:TQREACTOR.TQUEUE, rows: 99
 
-2015-04-23 11:18:20 CQ NOTIF ||:regid:139, XID:09002000DCB80200, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+2015-04-23 11:18:20 CQ NOTIF ||:regid:139, XID:09002000DCB80200, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76,
     qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:ALL_ROWS, INSERTOP, table:TQREACTOR.TQUEUE, rows: 3220 (ALL)
 
-2015-04-23 11:17:45 CQ NOTIF ||:regid:139, XID:01001F0005B40100, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+2015-04-23 11:17:45 CQ NOTIF ||:regid:139, XID:01001F0005B40100, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76,
     qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:INSERTOP, table:TQREACTOR.TQUEUE, rows: 100
 
-2015-04-23 11:17:23 CQ NOTIF ||:regid:139, XID:0A001E00E5D20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76, 
+2015-04-23 11:17:23 CQ NOTIF ||:regid:139, XID:0A001E00E5D20800, dbname:ORCL, event:EVENT_QUERYCHANGE, qid:76,
     qop:ALL_ROWS, INSERTOP, UPDATEOP, tops:ALL_ROWS, INSERTOP, table:TQREACTOR.TQUEUE, rows: 2120 (ALL)
-    
+
 TYPE CQ_NOTIFICATION$_DESCRIPTOR IS OBJECT(
    registration_id    NUMBER,
    transaction_id     RAW(8),
@@ -725,25 +852,28 @@ TYPE CQ_NOTIFICATION$_DESCRIPTOR IS OBJECT(
    numtables          NUMBER,
    table_desc_array   CQ_NOTIFICATION$_TABLE_ARRAY,
    query_desc_array   CQ_NOTIFICATION$_QUERY_ARRAY);
-   
+
 TYPE CQ_NOTIFICATION$_QUERY IS OBJECT (
   queryid            NUMBER,
   queryop            NUMBER,  -- Operation describing change to the query
   table_desc_array   CQ_NOTIFICATION$_TABLE_ARRAY);
-  
+
+
+
+
 TYPE CQ_NOTIFICATION$_TABLE  IS OBJECT (
   opflags            NUMBER,  -- It can be an OR of the following bit fields - INSERTOP, UPDATEOP, DELETEOP, DROPOP, ALTEROP, ALL_ROWS
   table_name         VARCHAR2(2*M_IDEN+1),
   numrows            NUMBER,  -- NULL if ALL_ROWS
-  row_desc_array     CQ_NOTIFICATION$_ROW_ARRAY)  
-  
+  row_desc_array     CQ_NOTIFICATION$_ROW_ARRAY)
+
 TYPE CQ_NOTIFICATION$_ROW IS OBJECT (
   opflags            NUMBER,  -- could be INSERTOP, UPDATEOP or DELETEOP
-  row_id             VARCAHR2 (2000));  
-  
-  
-   
-   
+  row_id             VARCAHR2 (2000));
+
+
+
+
   */
 
 

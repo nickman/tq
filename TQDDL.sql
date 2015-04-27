@@ -33,6 +33,22 @@
    CREATE SEQUENCE  SEQ_BATCH_ID  MINVALUE 0 MAXVALUE 2147483647 INCREMENT BY 1 START WITH 1 CACHE 1000 ORDER  NOCYCLE ;
 
 --------------------------------------------------------
+--  DDL for Sequence SEQ_REXEC_ID
+--------------------------------------------------------
+
+   CREATE SEQUENCE  SEQ_REXEC_ID  MINVALUE 0 MAXVALUE 2147483647 INCREMENT BY 1 START WITH 1 CACHE 10 ORDER  NOCYCLE ;
+
+
+--------------------------------------------------------
+--  DDL for Table REHANDLER
+--------------------------------------------------------
+
+CREATE TABLE REHANDLERS (
+  ID INT PRIMARY KEY NOT NULL,
+  N CQ_NOTIFICATION$_DESCRIPTOR NOT NULL
+);
+
+--------------------------------------------------------
 --  DDL for Table ACCOUNT
 --------------------------------------------------------
 
@@ -204,19 +220,19 @@ CREATE OR REPLACE TYPE TQSTUB_ARR FORCE AS TABLE OF TQSTUB;
 
 
 
-create or replace TYPE TQBATCH FORCE AS OBJECT ( 
+create or replace TYPE TQBATCH FORCE AS OBJECT (
   ACCOUNT           INT,
   TCOUNT            INT,
   FIRST_T           INT,
   LAST_T            INT,
   BATCH_ID          INT,
   ROWIDS            XROWIDS,
-  TRADES            TQSTUB_ARR,
+  STUBS             TQSTUB_ARR,
   MEMBER PROCEDURE SETXIDS,
   MEMBER PROCEDURE SETXIDS(rowids IN XROWIDS),
   MEMBER FUNCTION XIDS RETURN XROWIDS,
   MEMBER FUNCTION TXIDS RETURN XROWIDS,
-  MEMBER PROCEDURE UPDATE_TRADES(lockedTrades IN TQTRADE_ARR, droppedTrades OUT TQTRADE_ARR),
+  MEMBER PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR),
   MAP MEMBER FUNCTION GET_FIRST_TRADEQUEUE_ID RETURN NUMBER
 );
 /
@@ -231,13 +247,13 @@ create or replace type body tqbatch as
   END;
   --
   MEMBER PROCEDURE SETXIDS IS
-    rids XROWIDS;
+    rids XROWIDS := new XROWIDS();
   BEGIN
     IF SELF.ROWIDS IS NULL THEN
       rids := new XROWIDS();
-      rids.extend(TRADES.COUNT);
-      FOR i in 1..TRADES.COUNT LOOP
-            rids(i) := TRADES(i).XROWID;
+      rids.extend(STUBS.COUNT);
+      FOR i in 1..STUBS.COUNT LOOP
+            rids(i) := STUBS(i).XROWID;
       END LOOP;
       SELF.ROWIDS := rowids;
     END IF;
@@ -247,7 +263,7 @@ create or replace type body tqbatch as
     BEGIN
     IF SELF.ROWIDS IS NULL THEN
       IF rowids IS NOT NULL THEN
-        IF rowids.COUNT = SELF.TRADES.COUNT THEN
+        IF rowids.COUNT = SELF.STUBS.COUNT THEN
           SELF.ROWIDS := rowids;
         END IF;
       END IF;
@@ -255,22 +271,23 @@ create or replace type body tqbatch as
   END;
   --
   MEMBER FUNCTION TXIDS RETURN XROWIDS IS
-    rids XROWIDS;
+    rids XROWIDS := new XROWIDS();
   BEGIN
-    rids.EXTEND(TRADES.COUNT);
-    FOR i in 1..TRADES.COUNT LOOP
-      rids(i) := TRADES(i).TQROWID;
+    rids.EXTEND(STUBS.COUNT);
+    FOR i in 1..STUBS.COUNT LOOP
+      rids(i) := STUBS(i).TQROWID;
     END LOOP;
+    RETURN rids;
   END;
---  
+--
   MEMBER FUNCTION XIDS RETURN XROWIDS IS
-    rids XROWIDS;
+    rids XROWIDS := new XROWIDS();
   BEGIN
     IF SELF.ROWIDS IS NULL THEN
       rids := new XROWIDS();
-      rids.extend(TRADES.COUNT);
-      FOR i in 1..TRADES.COUNT LOOP
-            rids(i) := TRADES(i).XROWID;
+      rids.extend(STUBS.COUNT);
+      FOR i in 1..STUBS.COUNT LOOP
+            rids(i) := STUBS(i).XROWID;
       END LOOP;
       RETURN rids;
     ELSE
@@ -278,21 +295,11 @@ create or replace type body tqbatch as
     END IF;
   END;
 --
-  MEMBER PROCEDURE UPDATE_TRADES(lockedTrades IN TQTRADE_ARR, droppedTrades OUT TQTRADE_ARR) IS  
-    updatedTQStubs TQSTUB_ARR := new TQSTUB_ARR();
-    lockedTQIds INT_ARR := new INT_ARR();
-    currentTQIds INT_ARR := new INT_ARR();
-    
+  MEMBER PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR) IS
   BEGIN
-    currentTQIds.extend(SELF.TRADES.COUNT);
-    IF (droppedTrades IS NULL) THEN
-      NULL;
-    END IF;
-    updatedTQStubs.EXTEND(lockedTrades.COUNT);
-    FOR i in 1..lockedTrades.COUNT LOOP
-      NULL;
-    END LOOP;
-    SELF.TRADES := updatedTQStubs;
+    SELF.STUBS := lockedStubs;
+    SELF.ROWIDS := NULL;
+    SETXIDS;
   END;
 END;
 /
@@ -421,25 +428,37 @@ SELECT * FROM TABLE(TQV.GETBATCHES);
 --------------------------------------------------------
 
 create or replace PROCEDURE TQUEUE_INSERT_CALLBACK (
-  ntfnds IN OUT CQ_NOTIFICATION$_DESCRIPTOR   ) IS  
+  ntfnds IN OUT CQ_NOTIFICATION$_DESCRIPTOR   ) IS
+  PRAGMA AUTONOMOUS_TRANSACTION;
+  TARGET_CHANGED EXCEPTION;
+  PRAGMA EXCEPTION_INIT(TARGET_CHANGED, -6508 );
+  
 BEGIN
 /*
   IF (ntfnds.event_type != DBMS_CQ_NOTIFICATION.EVENT_QUERYCHANGE) THEN
     RETURN;
   END IF;
-*/  
+*/
   LOGEVENT('CALLBACK:' || ntfnds.transaction_id);
-  TQV.HANDLE_CHANGE(
-    ntfnds
-  );
-    EXCEPTION WHEN OTHERS THEN 
+  TQV.HANDLE_CHANGE(ntfnds);  
+  COMMIT;
+    /*  THIS error happens sometimes:  "CALLBACK ERROR: [ORA-06508: PL/SQL: could not find program unit being called] - ORA-06512: at "TQREACTOR.TQUEUE_INSERT_CALLBACK", line 10 */
+    EXCEPTION 
+    WHEN TARGET_CHANGED THEN
+      BEGIN
+        LOGEVENT('RE-EXECUTING....');
+        EXECUTE IMMEDIATE 'BEGIN TQV.HANDLE_CHANGE(:1); WHEN OTHERS THEN DECLARE errm VARCHAR2(2000) := SQLERRM;errc NUMBER := SQLCODE; BEGIN LOGEVENT(''CALLBACK ERROR: ['' || errm || ''] - '' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc); END;' USING ntfnds;
+        LOGEVENT('RE-EXECUTE SUCCESSFUL');        
+      END;      
+    WHEN OTHERS THEN
       DECLARE
         errm VARCHAR2(2000) := SQLERRM;
         errc NUMBER := SQLCODE;
       BEGIN
         LOGEVENT('CALLBACK ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+        COMMIT;
       END;
-  
+
 END;
 /
 

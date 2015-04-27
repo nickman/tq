@@ -1,8 +1,7 @@
-CREATE OR REPLACE
-PACKAGE BODY TESTDATA AS
+create or replace PACKAGE BODY TESTDATA AS
 
   TYPE SEC_DECODE_CACHE_IDX IS TABLE OF SEC_DECODE INDEX BY PLS_INTEGER;
-  TYPE ACCT_DECODE_CACHE_IDX IS TABLE OF ACCT_DECODE INDEX BY PLS_INTEGER;  
+  TYPE ACCT_DECODE_CACHE_IDX IS TABLE OF ACCT_DECODE INDEX BY PLS_INTEGER;
 
   accountCacheIdx ACCT_DECODE_CACHE_IDX;
   securityCacheIdx SEC_DECODE_CACHE_IDX;
@@ -101,12 +100,22 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   PROCEDURE GENTRADES(tradeCount IN NUMBER DEFAULT 1000) IS
     account ACCT_DECODE;
     security SEC_DECODE;
+    noOfTrades INT := 0;
+    done INT := 0;
   BEGIN
+    
     FOR i in 1..tradeCount LOOP
-      account := RANDOMACCT;
-      security := RANDOMSEC;
-      INSERT INTO TQUEUE
-        VALUES(SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',  security.SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
+      IF done = tradeCount THEN EXIT; END IF;      
+      account := RANDOMACCT;      
+      noOfTrades := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, 10));
+      IF noOfTrades = 0 THEN noOfTrades := 1; END IF;
+      FOR x in 1..noOfTrades LOOP
+        security := RANDOMSEC;
+        INSERT INTO TQUEUE
+          VALUES(SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',  security.SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
+        done := done + 1;
+        IF done = tradeCount THEN EXIT; END IF;
+      END LOOP;
     END LOOP;
     COMMIT;
   END GENTRADES;
@@ -146,7 +155,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       accountCache.DELETE;
       accountCacheIdx.DELETE;
       securityCache.DELETE;
-      securityCacheIdx.DELETE;       
+      securityCacheIdx.DELETE;
        -- populate accountCache
       idx := 1;
       FOR R IN (SELECT ACCOUNT_DISPLAY_NAME, ACCOUNT_ID FROM ACCOUNT) LOOP
