@@ -1,8 +1,9 @@
+
 Begin  
   Execute Immediate 'truncate table event';
   Execute Immediate 'truncate table tqueue';
   Execute Immediate 'truncate table tqstubs';
-  /*
+  /*  
   TESTDATA.GENACCTS();
   COMMIT;
   TESTDATA.GENSECS();
@@ -10,7 +11,7 @@ Begin
   DBMS_OUTPUT.PUT_LINE(TESTDATA.FORCELOADCACHE);
   */
   --FOR i in 1..100 LOOP
-    Testdata.Gentrades(100);
+    Testdata.Gentrades(10000);
   --END LOOP;
   Commit;
 End;
@@ -32,38 +33,8 @@ select 'LAST TQ', max(tqueue_id) from tqueue where status_code = 'CLEARED'
 
 
 
-DECLARE
-  batches TQBATCH_ARR;
-  trades TQTRADE_ARR;
-  now DATE := SYSDATE;
-BEGIN
-  EXECUTE IMMEDIATE 'truncate table event';
-  select TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,STUBS ) 
-  BULK COLLECT INTO batches
-  FROM TABLE(TQV.QUERYTBATCHES(0, 100, 5))    -- STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10
-  ORDER BY FIRST_T;
-  DBMS_OUTPUT.put_line('FOUND ' || batches.COUNT || ' BATCHES');
-  TQV.LOCKBATCHES(batches);
-  DBMS_OUTPUT.put_line('LOCKED ' || batches.COUNT || ' BATCHES');
-  FOR i in 1..batches.COUNT LOOP
-    TQV.RELOCKBATCH(batches(i));
-    --DBMS_OUTPUT.put_line('RELOCKED BATCH#' || i);
-    DBMS_OUTPUT.put_line('PRE-START STUBS:' || batches(i).STUBS.COUNT);
-    trades := TQV.STARTBATCH(batches(i));
-    DBMS_OUTPUT.put_line('POST-START STUBS:' || batches(i).STUBS.COUNT);
-    DBMS_OUTPUT.put_line('LOCKED ' || trades.COUNT || ' TRADES, EXPECTED: ' || batches(i).STUBS.COUNT);
-    now := SYSDATE;
-    FOR x in 1..trades.COUNT LOOP
-      trades(x).STATUS_CODE := 'CLEARED';
-      trades(x).UPDATE_TS :=  now;
-    END LOOP;
-    TQV.SAVETRADES(trades, batches(i).BATCH_ID);  
-    TQV.FINISHBATCH(batches(i).ROWIDS);
-    COMMIT;
-  END LOOP;
-END;
 
-select * from event order by event_id desc
+select * from event order by event_id 
 
 select ACCOUNT_ID, COUNT(*) from tqueue where status_code = 'CLEARED'  GROUP BY ACCOUNT_ID ORDER BY COUNT(*) DESC
 
@@ -94,3 +65,61 @@ select * from tqstubs
 
 
 
+
+
+DECLARE
+  batches TQBATCH_ARR;
+  trades TQTRADE_ARR;
+  now DATE := SYSDATE;
+  stubsBefore INT := 0;
+  stubsAfter INT := 0;
+  lastProcessed INT := 0;
+  TYPE LOCK_TAB IS TABLE OF VARCHAR2(200) INDEX BY PLS_INTEGER;  
+  lockName VARCHAR2(200);
+  allLocks LOCK_TAB := NEW LOCK_TAB;
+  lockIndex PLS_INTEGER := 0;
+BEGIN
+  EXECUTE IMMEDIATE 'truncate table event';
+  WHILE(lastProcessed > -1) LOOP
+    SELECT TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,STUBS ) 
+      BULK COLLECT INTO batches
+      FROM TABLE(TQV.QUERYTBATCHES(lastProcessed, 1000, 1000))    -- STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10
+      ORDER BY FIRST_T;
+    IF batches IS NULL OR batches.COUNT = 0 THEN 
+      lastProcessed := -1;
+      EXIT;
+    END IF;
+    --DBMS_OUTPUT.put_line('FOUND ' || batches.COUNT || ' BATCHES');
+    TQV.LOCKBATCHES(batches);
+    --DBMS_OUTPUT.put_line('LOCKED ' || batches.COUNT || ' BATCHES');
+    FOR i in 1..batches.COUNT LOOP
+      INSERT INTO READYTQBATCH VALUES(batches(i));
+      /*
+      TQV.RELOCKBATCH(batches(i));
+      --DBMS_OUTPUT.put_line('RELOCKED BATCH#' || i);
+      stubsBefore := batches(i).ROWIDS.COUNT;    
+      trades := TQV.STARTBATCH(batches(i));
+      stubsAfter := batches(i).ROWIDS.COUNT;        
+      IF stubsBefore != stubsAfter THEN      
+        LOGEVENT('POST-START STUBS DROPS:  before:' || stubsBefore || ', after:' || stubsAfter );
+      END IF;
+      --DBMS_OUTPUT.put_line('LOCKED ' || trades.COUNT || ' TRADES, EXPECTED: ' || batches(i).STUBS.COUNT);
+      now := SYSDATE;
+      FOR x in 1..trades.COUNT LOOP
+        trades(x).STATUS_CODE := 'CLEARED';
+        trades(x).UPDATE_TS :=  now;
+      END LOOP;
+      TQV.SAVETRADES(trades, batches(i).BATCH_ID);  
+      TQV.FINISHBATCH(batches(i).ROWIDS);
+      */
+      lastProcessed := batches(i).LAST_T;
+      DBMS_OUTPUT.put_line('Last Proc:' || lastProcessed);
+      DBMS_LOCK.ALLOCATE_UNIQUE ('TQBATCHLOCK#' || batches(i).BATCH_ID, lockName);
+      lockIndex := lockIndex +1;
+      allLocks(lockIndex) := lockName;
+      
+      COMMIT;
+    END LOOP;
+    LOGEVENT('CREATED ' || lockIndex || ' LOCKS');
+  END LOOP;
+END;

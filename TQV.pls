@@ -108,6 +108,8 @@ create or replace PACKAGE TQV AS
   PROCEDURE SAVETRADES(trades IN TQTRADE_ARR, batchId IN INT);
   -- Deletes all the stubs for a batch by the passed rowids
   PROCEDURE FINISHBATCH(batchRowids IN XROWIDS);
+  
+  PROCEDURE RUNBATCH(batchId IN INT, lockName IN VARCHAR2);
 
   -- Updates the trades in a batch
   --PROCEDURE UPDATEBATCH(batch IN TQBATCH);
@@ -125,7 +127,7 @@ create or replace PACKAGE TQV AS
   -- a toString for TQSTUBs in an array of TQSTUBs
   FUNCTION STUBTOSTR(STUBS IN TQSTUB_ARR) RETURN VARCHAR2;
   -- Autonomous TX Logger, super basic
-  PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0);
+  -- PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0);
   -- Acquires the XID of the current transaction
   FUNCTION CURRENTXID RETURN RAW;
 

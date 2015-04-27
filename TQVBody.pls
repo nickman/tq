@@ -282,13 +282,14 @@ create or replace PACKAGE BODY TQV AS
   -- *******************************************************
   --    Autonomous TX Logger
   -- *******************************************************
-
+/*
   PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0) IS
     PRAGMA AUTONOMOUS_TRANSACTION;
   BEGIN
     INSERT INTO EVENT(EVENT_ID, ERRC, TS, EVENT) VALUES (SEQ_EVENT_ID.NEXTVAL, ABS(errcode), SYSDATE, msg);
     COMMIT;
   END LOGEVENT;
+*/  
 --
   -- *******************************************************
   --    Attempts to lock the row in TQSTUBS
@@ -350,6 +351,15 @@ create or replace PACKAGE BODY TQV AS
       LOCKBATCH(batch);
     END LOOP;
   END LOCKBATCHES;
+  
+  FUNCTION CS(arr IN TQSTUB_ARR) RETURN INT IS
+  BEGIN
+    IF arr IS NOT NULL THEN
+      RETURN arr.COUNT;
+    ELSE
+      RETURN 0;
+    END IF;  
+  END CS;
 
 
   -- *******************************************************
@@ -504,11 +514,9 @@ create or replace PACKAGE BODY TQV AS
             SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
           );
 
-          tqbatch.STUBS := updatedStubs;
-          tqbatch.ROWIDS := NULL;
-          tqbatch.SETXIDS;          
+          tqbatch.UPDATE_STUBS(updatedStubs);
 
-          IF droppedStubs IS NOT NULL AND droppedStubs.COUNT > 0 THEN
+          IF CS(droppedStubs) > 0 THEN
             FORALL i in 1..droppedStubs.COUNT
               UPDATE TQSTUBS SET BATCH_ID = -1, BATCH_TS = NULL
                 WHERE ROWID = CHARTOROWID(droppedStubs(i).XROWID);
@@ -516,16 +524,8 @@ create or replace PACKAGE BODY TQV AS
 
 
           --tqbatch.UPDATE_TRADES(lockedTrades, droppedTrades);
-          IF lockedTrades IS NOT NULL THEN
-            locked := lockedTrades.COUNT;
-          ELSE
-            locked := 0;
-          END IF;
-          IF droppedTrades IS NOT NULL THEN
-            dropped := droppedTrades.COUNT;
-          ELSE
-            dropped := 0;
-          END IF;
+          locked := tqbatch.ROWIDS.COUNT;
+          dropped := CS(droppedStubs);          
 
           LOGEVENT('SINGLE LOCK RESULTS:  locked:[' || locked || '], dropped:[' || dropped || ']');
           RETURN lockedTrades;
@@ -579,6 +579,24 @@ create or replace PACKAGE BODY TQV AS
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rids)
     );
   END FINISHBATCH;
+  
+  PROCEDURE RUNBATCH(batchId IN INT, lockName IN VARCHAR2) IS
+    tqb TQBATCH := NULL;
+    trades TQTRADE_ARR := NULL;
+    now DATE := NULL;
+  BEGIN
+    SELECT VALUE(T) INTO tqb FROM READYTQBATCH T WHERE BATCH_ID = batchId;
+    RELOCKBATCH(tqb);
+    DBMS_OUTPUT.put_line('RELOCKED BATCH#' || batchId);
+    trades := STARTBATCH(tqb);
+    now := SYSDATE;
+    FOR x in 1..trades.COUNT LOOP
+      trades(x).STATUS_CODE := 'CLEARED';
+      trades(x).UPDATE_TS :=  now;
+    END LOOP;
+    SAVETRADES(trades, tqb.BATCH_ID);  
+    FINISHBATCH(tqb.ROWIDS);  
+  END RUNBATCH;
 
 --
   -- *******************************************************
