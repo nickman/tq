@@ -93,11 +93,14 @@ create or replace PACKAGE TQV AS
   -- Groups a pipelined stream of TQSTUBs into TQBATCHes
   FUNCTION TRADEBATCH(STUBS IN TQSTUB_ARR, MAX_BATCH_SIZE IN PLS_INTEGER DEFAULT 100) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE;
   -- Starts a pipelined query to find TQSTUBs to process
-  FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED;
+  FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10, WAIT_TIME IN INT DEFAULT 0) RETURN TQBATCH_ARR PIPELINED;
   -- Pipelined Query for viewing existing TQBATCHes
   FUNCTION GETBATCHES RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE;
-  -- Locks the stubs in a batch and assigns a batch id and batch timestamp
+  -- Locks the stubs in a batch and assigns a batch id and batch timestamp, commiting the update
   PROCEDURE LOCKBATCH(batch IN OUT TQBATCH);
+  -- Locks the stubs in a batch and assigns a batch id and batch timestamp, commiting the update if commitTX is != 0
+  PROCEDURE LOCKBATCH(batch IN OUT TQBATCH, commitTX IN INT);
+  
   -- Relocks the stubs in a batch as part of the actual trade processing transaction
   PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH);
   -- Locks the trades in an array of batches
@@ -108,7 +111,7 @@ create or replace PACKAGE TQV AS
   PROCEDURE SAVETRADES(trades IN TQTRADE_ARR, batchId IN INT);
   -- Deletes all the stubs for a batch by the passed rowids
   PROCEDURE FINISHBATCH(batchRowids IN XROWIDS);
-  
+
   PROCEDURE RUNBATCH(batchId IN INT, lockName IN VARCHAR2);
 
   -- Updates the trades in a batch
@@ -117,7 +120,7 @@ create or replace PACKAGE TQV AS
   --PROCEDURE UPDATEBATCHES(batches IN TQBATCH_ARR);
   -- The TQSTUB insert handler, fired when a new trade comes into scope in the TQUEUE table
 
-  PROCEDURE HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR);
+  FUNCTION HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR) RETURN NUMBER;
 
 
 

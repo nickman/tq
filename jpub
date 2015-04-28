@@ -6,11 +6,14 @@ export JPUB_LIBS=/home/nwhitehead/libs/java/oracle/jpub
 export CLASSPATH=$JPUB_LIBS/ojdbc6.jar:$JPUB_LIBS/translator.jar:$JPUB_LIBS/runtime12.jar
 export CLASS_DIR=/home/nwhitehead/hprojects/tqueue/src/main/java
 export PACKAGE=tqueue.db.types
+export TYPES=TQSTUB,TQSTUB_ARR,TQBATCH_ARR,TQBATCH,TQTRADE,TQTRADE_ARR,XROWIDS
+export JURL=jdbc:oracle:thin:@//localhost:1521/XE
 echo $CLASSPATH
 #$JAVA_HOME/bin/java oracle.jpub.Doit -url=jdbc:oracle:thin:@//tporacle:1521/ORCL -user=tqreactor/tq -dir=. -numbertypes=objectjdbc -builtintypes=jdbc -usertypes=jdbc -package=tq -case=mixed -serializable=true -tostring=true -compile=true -sql=TQSTUB,TQSTUB_ARR
 #$JAVA_HOME/bin/java oracle.jpub.Doit -url=jdbc:oracle:thin:@//tporacle:1521/ORCL -user=tqreactor/tq -dir=$CLASS_DIR -numbertypes=objectjdbc -builtintypes=jdbc -package=$PACKAGE -case=mixed -serializable=true -tostring=true -compile=true -sql=TQSTUB,TQSTUB_ARR
 #$JAVA_HOME/bin/java oracle.jpub.Doit -url=jdbc:oracle:thin:@//tporacle:1521/ORCL -user=tqreactor/tq -dir=$CLASS_DIR -numbertypes=jdbc -builtintypes=jdbc -usertypes=jdbc -package=$PACKAGE -case=mixed -serializable=true -tostring=true -compile=true -sql=JTQSTUB,JTQSTUB_ARR
-$JAVA_HOME/bin/java oracle.jpub.Doit -url=jdbc:oracle:thin:@//leopard:1521/XE -user=tqreactor/tq -dir=$CLASS_DIR -numbertypes=jdbc -builtintypes=jdbc -package=$PACKAGE -case=mixed -serializable=true -tostring=true -compile=true -sql=TQBATCH_ARR,TQBATCH,TQSTUB,TQSTUB_ARR
+$JAVA_HOME/bin/java oracle.jpub.Doit -url=$JURL -user=tqreactor/tq -dir=$CLASS_DIR -numbertypes=jdbc -builtintypes=jdbc -package=$PACKAGE -case=mixed -serializable=true -tostring=true -compile=true -sql=$TYPES
+
 
 
 ###

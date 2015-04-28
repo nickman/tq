@@ -53,13 +53,6 @@ CREATE TABLE REHANDLERS (
   N CQ_NOTIFICATION$_DESCRIPTOR NOT NULL
 );
 
-CREATE TABLE READYTQBATCH OF TQBATCH (BATCH_ID PRIMARY KEY)
-  NESTED TABLE STUBS STORE AS stubs_tab
-  NESTED TABLE ROWIDS STORE AS rowids_tab;
-
-CREATE TABLE BATCHTRACKER (
-
-)
 
 
 --------------------------------------------------------
@@ -352,6 +345,11 @@ create or replace type body tqbatch as
 END;
 /
 
+CREATE TABLE READYTQBATCH OF TQBATCH (BATCH_ID PRIMARY KEY)
+  NESTED TABLE STUBS STORE AS stubs_tab
+  NESTED TABLE ROWIDS STORE AS rowids_tab;
+
+
 --------------------------------------------------------
 --  DDL for View TQUEUEO
 --------------------------------------------------------
@@ -470,7 +468,7 @@ create or replace PROCEDURE TQUEUE_INSERT_CALLBACK (
   PRAGMA AUTONOMOUS_TRANSACTION;
   TARGET_CHANGED EXCEPTION;
   PRAGMA EXCEPTION_INIT(TARGET_CHANGED, -6508 );
-  
+  events NUMBER := 0;
 BEGIN
 /*
   IF (ntfnds.event_type != DBMS_CQ_NOTIFICATION.EVENT_QUERYCHANGE) THEN
@@ -478,16 +476,17 @@ BEGIN
   END IF;
 */
   LOGEVENT('CALLBACK:' || ntfnds.transaction_id);
-  TQV.HANDLE_CHANGE(ntfnds);  
+  events := TQV.HANDLE_CHANGE(ntfnds);
+  DBMS_ALERT.SIGNAL ('TQSTUB.ALERT.EVENT', TO_CHAR(events));
   COMMIT;
     /*  THIS error happens sometimes:  "CALLBACK ERROR: [ORA-06508: PL/SQL: could not find program unit being called] - ORA-06512: at "TQREACTOR.TQUEUE_INSERT_CALLBACK", line 10 */
-    EXCEPTION 
+    EXCEPTION
     WHEN TARGET_CHANGED THEN
       BEGIN
         LOGEVENT('RE-EXECUTING....');
         EXECUTE IMMEDIATE 'BEGIN TQV.HANDLE_CHANGE(:1); WHEN OTHERS THEN DECLARE errm VARCHAR2(2000) := SQLERRM;errc NUMBER := SQLCODE; BEGIN LOGEVENT(''CALLBACK ERROR: ['' || errm || ''] - '' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc); END;' USING ntfnds;
-        LOGEVENT('RE-EXECUTE SUCCESSFUL');        
-      END;      
+        LOGEVENT('RE-EXECUTE SUCCESSFUL');
+      END;
     WHEN OTHERS THEN
       DECLARE
         errm VARCHAR2(2000) := SQLERRM;
