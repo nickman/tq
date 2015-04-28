@@ -27,6 +27,13 @@ package tqueue.db;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import oracle.jdbc.OracleCallableStatement;
 import oracle.jdbc.OracleResultSet;
@@ -36,6 +43,8 @@ import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Logger;
 
 import tqueue.db.types.TQBATCH;
+import tqueue.db.types.TQTRADE;
+import tqueue.db.types.TQTRADE_ARR;
 import tqueue.pools.ConnectionPool;
 
 /**
@@ -58,13 +67,34 @@ public class OracleAdapter {
 	
 	public static final String LOCK_BATCH_SQL =
 			"BEGIN TQV.LOCKBATCH(?, ?); END;";
-//			"BEGIN ? := TQV.LOCKBATCHR(?); END;";
-			
+
+	public static final String RELOCK_BATCH_SQL = 
+			"BEGIN TQV.RELOCKBATCH(?); END;";
+
+	public static final String START_BATCH_SQL = 
+			"BEGIN ? := TQV.STARTBATCH(?); END;";
+
+	public static final String SAVE_TRADES_SQL = 
+			"BEGIN TQV.SAVETRADES(?, ?); END;";
+	
+	public static final String FINISH_BATCH_SQL = 
+			"BEGIN TQV.FINISHBATCH(?); END;";
+	
+	protected final ThreadFactory tf = new ThreadFactory() {
+		final AtomicInteger serial = new AtomicInteger(0);
+		public Thread newThread(final Runnable r) {
+			Thread t = new Thread(r, "TQReactorThread#" + serial.incrementAndGet());
+			t.setDaemon(true);
+			return t;
+		}
+	};
+	protected final ThreadPoolExecutor tpe = new ThreadPoolExecutor(12, 24, 60, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(10240, false ), tf); 
 	
 	public static void main(String[] args) {
 		BasicConfigurator.configure();		
 		OracleAdapter oa = new OracleAdapter();
-		oa.getTQBatches(0, 5000, 10, 5);
+		oa.tpe.prestartAllCoreThreads();
+		oa.getTQBatches(0, 20000, 50, 5);		
 //		final int warmups = 1000;
 //		final int loops = 1000;
 //		for(int i = 0; i < warmups; i++) {
@@ -125,11 +155,12 @@ public class OracleAdapter {
 		PreparedStatement ps = null;
 		OracleCallableStatement csRelock = null;
 		ResultSet rs = null;
-		int startId = startAt;
+		final AtomicInteger startId = new AtomicInteger(startAt);
+		final AtomicInteger pending = new AtomicInteger(0);
 		try {
 			conn = ConnectionPool.getInstance().getConnection();
 			oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);
-			ps = oraConn.prepareStatement(POLL_BATCH_SQL);
+			ps = oraConn.prepareStatement(POLL_BATCH_SQL);			
 			csRelock = (OracleCallableStatement)oraConn.prepareCall(LOCK_BATCH_SQL);
 			/*
 			 * Need to catch this and continue
@@ -140,41 +171,91 @@ public class OracleAdapter {
 			 * ORA-06512: at line 1
 			 */
 			
+			ps.setInt(1, 0);
 			ps.setInt(2, maxRows);
 			ps.setInt(3, maxBatchSize);
 			ps.setInt(4, maxWait);			
-			for(int i = 0; i < 1000; i++) {
-				log.info("Fetching Batches starting at [" + startId + "]");
-				ps.setInt(1, startId);
+			for(int i = 0; i < Integer.MAX_VALUE; i++) {
+				//log.info("Fetching Batches starting at [" + startId + "]");
+				//ps.setInt(1, startId.get());
+				while(pending.get()!=0) {
+					Thread.yield();
+				}
 				rs = ps.executeQuery();
 				rs.setFetchSize(maxRows * maxBatchSize);
 				int batchCount = 0;
 				int stubCount = 0;
+				int dropCount = 0;
 				while(rs.next()) {				
-					TQBATCH batch = (TQBATCH)((OracleResultSet)rs).getORAData(1, TQBATCH.getORADataFactory());
-					if(batch.getAccount()==-1) {
-						log.info("Timed out waiting for results");
+					TQBATCH preBatch = (TQBATCH)((OracleResultSet)rs).getORAData(1, TQBATCH.getORADataFactory());
+					if(preBatch.getAccount()==-1) {
+						//log.info("Timed out waiting for results");
 						break;
 					}
 					csRelock.registerOutParameter(1, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);
 					
-					csRelock.setORAData(1, batch);
+					csRelock.setORAData(1, preBatch);
 					csRelock.setInt(2, 0);
 					//csRelock.setOracleObject(1, batch.toDatum(oraConn));
 					//csRelock.registerOutParameter(1, TQBATCH._SQL_TYPECODE);
 					
 					csRelock.execute();
-					batch = (TQBATCH)csRelock.getORAData(1, TQBATCH.getORADataFactory());
-					log.info("Batch Size:" + batch.getTcount() + ":" + batch);
-					startId = batch.getLastT();
+					TQBATCH postBatch = (TQBATCH)csRelock.getORAData(1, TQBATCH.getORADataFactory());
+//					log.info("Batch Size:" + batch.getTcount() + ":" + batch);
+					startId.set(postBatch.getLastT());
+					if(postBatch.getTcount() != preBatch.getTcount()) {
+						dropCount = (preBatch.getTcount() - postBatch.getTcount());
+					}
 					batchCount++;
-					stubCount += batch.getTcount();
+					stubCount += postBatch.getTcount();
 					conn.commit();
+					final TQBATCH b = postBatch;
+					final int bc = batchCount;
+					final int sc = stubCount;
+					final int dc = dropCount;
+					pending.incrementAndGet();
+					tpe.submit(new Runnable(){
+						public void run() {
+							try {
+								processBatch(b);
+								if(bc>0) {
+									if(dc>0) {
+										//System.err.println("Lock Drops:" + dc);
+									}
+									//log.info("Total Batches:" + bc + " Total Trades:" + sc);
+								}
+							} catch (Exception ex) {
+								System.err.println(ex);
+								startId.set(0);
+							} finally {
+								pending.decrementAndGet();
+							}
+						}						
+					});					
 				}
 				rs.close();
-				log.info("Total Batches:" + batchCount + " Total Trades:" + stubCount);
+				log.info("BatchSet Complete\n\tBatch Count:" + batchCount + "\n\tStub Count:" + stubCount + "\n\tDrop Count:" + dropCount);
+				batchCount = 0;
+				stubCount = 0;
+				dropCount = 0;
+
 			}
 			return null; // ((TQSTUB_ARR)((OracleCallableStatement)cs).getORAData(2, TQSTUB_ARR.getORADataFactory())).getArray();
+		} catch (SQLException sex) {
+//			log.info("SQLException:", sex);
+			if(rs!=null) try { rs.close(); } catch (Exception x) {/* No Op */}
+			if(ps!=null) try { ps.close(); } catch (Exception x) {/* No Op */}
+			if(csRelock!=null) try { csRelock.close(); } catch (Exception x) {/* No Op */}
+			if(conn!=null) try { conn.rollback(); } catch (Exception x) {/* No Op */}
+			if(conn!=null) try { conn.close(); } catch (Exception x) {/* No Op */}
+			if(sex.getErrorCode()==4068) {
+				log.warn("Package State Changed. Re-initializing....");
+				throw new RuntimeException(sex);
+				//return getTQBatches(startAt, maxRows, maxBatchSize, maxWait);
+			}
+			log.error("getTQStubs failed", sex);
+			throw new RuntimeException("getTQStubs failed", sex);
+			
 		} catch (Exception ex) {
 			log.error("getTQStubs failed", ex);
 			throw new RuntimeException("getTQStubs failed", ex);
@@ -182,33 +263,103 @@ public class OracleAdapter {
 			if(rs!=null) try { rs.close(); } catch (Exception x) {/* No Op */}
 			if(ps!=null) try { ps.close(); } catch (Exception x) {/* No Op */}
 			if(csRelock!=null) try { csRelock.close(); } catch (Exception x) {/* No Op */}
+			if(conn!=null) try { conn.rollback(); } catch (Exception x) {/* No Op */}
 			if(conn!=null) try { conn.close(); } catch (Exception x) {/* No Op */}
 		}		
 	}
 	
-	public void processBatch(TQBATCH batch) {
+	public void processBatch(final TQBATCH batchToProcess) {
 		Connection conn = null;
 		OracleConnection oraConn = null;
 		PreparedStatement ps = null;
-		OracleCallableStatement csRelock = null;
+		OracleCallableStatement cs = null;
 		ResultSet rs = null;
+		TQBATCH preBatch = batchToProcess;
+		
+		// RelockBatch
+//		"BEGIN TQV.RELOCKBATCH(?); END;";
+
+		//START_BATCH_SQL = 
+//		"BEGIN ? := TQV.STARTBATCH(?); END;";
+		
+//		public static final String SAVE_TRADES_SQL = 
+//				"BEGIN TQV.SAVETRADES(?, ?); END;";
+//		
+//		public static final String FINISH_BATCH_SQL = 
+//				"BEGIN TQV.FINISHBATCH(?); END;";
+		
+
+		TQBATCH postBatch = null;
 		try {
 			conn = ConnectionPool.getInstance().getConnection();
 			oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);
-			//ps = oraConn.prepareStatement(POLL_BATCH_SQL);
-			csRelock = (OracleCallableStatement)oraConn.prepareCall("BEGIN TQV.RELOCKBATCH(?); END;");
-			csRelock.registerOutParameter(1, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);			
-			csRelock.setORAData(1, batch);
-			csRelock.execute();
-			batch = (TQBATCH)csRelock.getORAData(1, TQBATCH.getORADataFactory());
+
+			//===========================================================================================
+			// 	 PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH);
+			//===========================================================================================
+			cs = (OracleCallableStatement)oraConn.prepareCall(RELOCK_BATCH_SQL);
+			cs.registerOutParameter(1, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);			
+			cs.setORAData(1, preBatch);
+			cs.execute();
+			postBatch = (TQBATCH)cs.getORAData(1, TQBATCH.getORADataFactory());
+			cs.close();
+			if(postBatch.getTcount() != preBatch.getTcount()) {
+				int dropCount = (preBatch.getTcount() - postBatch.getTcount());
+				//System.err.println("RE-Lock Drops:" + dropCount);
+			}
+			
+			//===========================================================================================
+			//		FUNCTION STARTBATCH(tqbatch IN OUT TQBATCH) RETURN TQTRADE_ARR;
+			//===========================================================================================
+			TQTRADE[] trades = null;
+			cs = (OracleCallableStatement)oraConn.prepareCall(START_BATCH_SQL);
+			
+			cs.registerOutParameter(2, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);			
+			cs.setORAData(2, postBatch);
+			cs.registerOutParameter(2, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);	
+			cs.registerOutParameter(1, TQTRADE_ARR._SQL_TYPECODE, TQTRADE_ARR._SQL_NAME);
+			cs.execute();
+			//return ((TQSTUB_ARR)((OracleCallableStatement)cs).getORAData(2, TQSTUB_ARR.getORADataFactory())).getArray();
+			trades = ((TQTRADE_ARR)cs.getORAData(1, TQTRADE_ARR.getORADataFactory())).getArray();
+			postBatch = (TQBATCH)cs.getORAData(2, TQBATCH.getORADataFactory());
+			cs.close();
+			if(trades.length != postBatch.getRowids().length()) {
+				log.error("Mismatch between trade count [" + trades.length + "] and postBatch stub count [" + postBatch.getRowids().length() + "]. (PreBatch:[" + preBatch.getRowids().length() + "])");
+				throw new RuntimeException("Mismatch between trade count [" + trades.length + "], postBatch ROWID count [" + postBatch.getRowids().length() + "] and postBatch Stub count [" + postBatch.getStubs().length() + "]");
+			}
 			
 			
+			//===========================================================================================
+			//		PROCEDURE SAVETRADES(trades IN TQTRADE_ARR, batchId IN INT);
+			//===========================================================================================			
+			final Timestamp ts = new Timestamp(System.currentTimeMillis());
+			for(TQTRADE tqt: trades) {
+		        tqt.setStatusCode("CLEARED");
+		        tqt.setUpdateTs(ts);				
+			}
+			cs = (OracleCallableStatement)oraConn.prepareCall(SAVE_TRADES_SQL);
+			cs.setORAData(1, new TQTRADE_ARR(trades));
+			cs.setInt(2, postBatch.getBatchId());
+			cs.execute();
+			cs.close();
+			
+			
+			//===========================================================================================
+			//		PROCEDURE FINISHBATCH(batchRowids IN XROWIDS);
+			//===========================================================================================						
+			cs = (OracleCallableStatement)oraConn.prepareCall(FINISH_BATCH_SQL);
+			cs.setORAData(1, postBatch.getRowids());
+			cs.execute();
+			cs.close();
+			conn.commit();
 		} catch (Exception ex) {
-			
+			log.error("Failed to process batch", ex);
+			throw new RuntimeException("Failed to process batch [" + postBatch + "]", ex);
 		} finally {
 			if(rs!=null) try { rs.close(); } catch (Exception x) {/* No Op */}
 			if(ps!=null) try { ps.close(); } catch (Exception x) {/* No Op */}
-			if(csRelock!=null) try { csRelock.close(); } catch (Exception x) {/* No Op */}
+			if(cs!=null) try { cs.close(); } catch (Exception x) {/* No Op */}
+			if(conn!=null) try { conn.rollback(); } catch (Exception x) {/* No Op */}
 			if(conn!=null) try { conn.close(); } catch (Exception x) {/* No Op */}			
 		}
 	}

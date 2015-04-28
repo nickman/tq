@@ -100,7 +100,7 @@ create or replace PACKAGE TQV AS
   PROCEDURE LOCKBATCH(batch IN OUT TQBATCH);
   -- Locks the stubs in a batch and assigns a batch id and batch timestamp, commiting the update if commitTX is != 0
   PROCEDURE LOCKBATCH(batch IN OUT TQBATCH, commitTX IN INT);
-  
+
   -- Relocks the stubs in a batch as part of the actual trade processing transaction
   PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH);
   -- Locks the trades in an array of batches

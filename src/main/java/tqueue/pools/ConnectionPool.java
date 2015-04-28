@@ -33,6 +33,7 @@ import javax.sql.DataSource;
 import oracle.sql.ORAData;
 
 import org.apache.log4j.BasicConfigurator;
+import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 
 import tqueue.db.types.JTQSTUB;
@@ -84,19 +85,21 @@ public class ConnectionPool {
 		config.setDriverClassName("oracle.jdbc.OracleDriver");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//tporacle:1521/ORCL");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//leopard:1521/XE");
-		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
 		config.setUsername("tqreactor");
 		config.setPassword("tq");
 		config.addDataSourceProperty("cachePrepStmts", "true");
 		config.addDataSourceProperty("prepStmtCacheSize", "250");
 		config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-		config.setMaximumPoolSize(5);
-		config.setMinimumIdle(2);
+		config.setMaximumPoolSize(50);
+		config.setMinimumIdle(10);
 		config.setConnectionTestQuery("SELECT SYSDATE FROM DUAL");
 		config.setConnectionTimeout(1002);
 		config.setAutoCommit(false);
 		config.setRegisterMbeans(true);
-		dataSource = new HikariDataSource(config);		
+		dataSource = new HikariDataSource(config);	
+		Logger.getLogger(com.zaxxer.hikari.pool.HikariPool.class).setLevel(Level.WARN);
 	}
 	
 	public DataSource getDataSource() {

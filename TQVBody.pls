@@ -154,7 +154,7 @@ create or replace PACKAGE BODY TQV AS
         currentTradeArr := new TQSTUB_ARR();
         currentPosAcctId := T.ACCOUNT_ID;
       END IF;
-      IF (T.ACCOUNT_ID != currentPosAcctId OR tcount = MAX_BATCH_SIZE OR T.SECURITY_TYPE='P') THEN
+      IF (T.ACCOUNT_ID != currentPosAcctId OR tcount = MAX_BATCH_SIZE OR T.SECURITY_TYPE='X') THEN
         IF T.SECURITY_TYPE='P' THEN
           -- If we already batched some trades, flush them and reset state
           IF tcount > 0 THEN
@@ -461,42 +461,11 @@ create or replace PACKAGE BODY TQV AS
     stubRowids XROWIDS;
     updatedStubs TQSTUB_ARR;
     droppedStubs TQSTUB_ARR;
+    
+    TRADE_STUB_MISMATCH EXCEPTION;
+    PRAGMA EXCEPTION_INIT( TRADE_STUB_MISMATCH, -20001 );
 
   BEGIN
-    /*
-    SELECT TQTRADE(ROWIDTOCHAR(ROWID), TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE)
-    BULK COLLECT INTO trades
-    FROM TQUEUE T
-    WHERE ROWID IN (
-      SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(rids)
-    )
-    LOGEVENT('Processing Batch: [' || tqbatch.trades.COUNT || '] Stubs');
-
-    SELECT ACCT_DECODE(A.ACCOUNT_DISPLAY_NAME, A.ACCOUNT_ID) BULK COLLECT INTO accts
-      FROM ACCOUNT A, TQSTUBS T
-      WHERE A.ACCOUNT_ID = T.ACCOUNT_ID
-      AND EXISTS (
-        SELECT RID FROM (
-          SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(stubRowIds) X
-        ) WHERE RID = T.ROWID
-      );
-      LOGEVENT('CACHED [' || accts.COUNT || '] ACCT_DECODES');
-
-
-
-    SELECT SEC_DECODE(S.SECURITY_DISPLAY_NAME, S.SECURITY_TYPE, S.SECURITY_ID) BULK COLLECT INTO secs
-      FROM SECURITY S, TQSTUBS T
-      WHERE S.SECURITY_ID = T.SECURITY_ID
-      AND EXISTS (
-        SELECT RID FROM (
-          SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(stubRowIds) X
-        ) WHERE RID = T.ROWID
-      );
-    LOGEVENT('CACHED [' || secs.COUNT || '] SEC_DECODES');
-
-    */
-
-
     -- First populate the trade ref fields with no locking
     SELECT TQTRADE(ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, T.XID, T.STATUS_CODE, T.SECURITY_DISPLAY_NAME, T.ACCOUNT_DISPLAY_NAME,
       S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID,
@@ -549,15 +518,6 @@ create or replace PACKAGE BODY TQV AS
               SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
           );
 
-          /*
-  ROWIDS            XROWIDS,
-  TRADES            TQSTUB_ARR,
-
-    stubRowids XROWIDS;
-    updatedStubs TQSTUB_ARR;
-
-          */
-
           SELECT VALUE(T) BULK COLLECT INTO updatedStubs FROM TABLE(CAST(tqbatch.STUBS as TQSTUB_ARR)) T
           WHERE T.TQROWID IN (
             SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
@@ -566,10 +526,16 @@ create or replace PACKAGE BODY TQV AS
           WHERE T.TQROWID NOT IN (
             SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
           );
+          tqbatch.UPDATE_STUBS(updatedStubs);
           locked := tqbatch.ROWIDS.COUNT;
           dropped := CS(droppedStubs);
+          
           LOGEVENT('SINGLE LOCK RESULTS:  locked:[' || locked || '], dropped:[' || dropped || ']');
-          tqbatch.UPDATE_STUBS(updatedStubs);
+          
+          
+          IF  (tqbatch.ROWIDS.COUNT != lockedTrades.COUNT) OR (tqbatch.STUBS.COUNT != lockedTrades.COUNT)   THEN
+            raise_application_error( -20001, 'Single Row Lock Mismatch. Locked Trades: [' || lockedTrades.COUNT ||'], Locked Stubs: [' || tqbatch.STUBS.COUNT || '], Locked ROWIDS: [' || tqbatch.ROWIDS.COUNT || ']');
+          END IF;
 
           IF CS(droppedStubs) > 0 THEN
             FORALL i in 1..droppedStubs.COUNT
@@ -577,7 +543,7 @@ create or replace PACKAGE BODY TQV AS
                 WHERE ROWID = CHARTOROWID(droppedStubs(i).XROWID);
           END IF;
 
-
+          
           --tqbatch.UPDATE_TRADES(lockedTrades, droppedTrades);
           RETURN lockedTrades;
         END;

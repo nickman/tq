@@ -5,7 +5,7 @@ create or replace PACKAGE BODY TESTDATA AS
 
   accountCacheIdx ACCT_DECODE_CACHE_IDX;
   securityCacheIdx SEC_DECODE_CACHE_IDX;
-  securityTypes CHAR_ARR := new CHAR_ARR('A', 'B', 'C', 'D', 'E', 'V', 'W', 'X', 'Y', 'Z', 'P');
+  securityTypes CHAR_ARR := new CHAR_ARR('A', 'B', 'C', 'D', 'E', 'P', 'V', 'W', 'X', 'Y', 'Z', 'P');
 
   -- =====================================================================
   -- ==== done ====
@@ -103,10 +103,10 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
     noOfTrades INT := 0;
     done INT := 0;
   BEGIN
-    
+
     FOR i in 1..tradeCount LOOP
-      IF done = tradeCount THEN EXIT; END IF;      
-      account := RANDOMACCT;      
+      IF done = tradeCount THEN EXIT; END IF;
+      account := RANDOMACCT;
       noOfTrades := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, 10));
       IF noOfTrades = 0 THEN noOfTrades := 1; END IF;
       FOR x in 1..noOfTrades LOOP

@@ -258,7 +258,7 @@ create or replace type body tqbatch as
   MEMBER PROCEDURE SETXIDS IS
     rids XROWIDS := new XROWIDS();
   BEGIN
-    IF SELF.ROWIDS IS NULL THEN      
+    IF SELF.ROWIDS IS NULL THEN
       rids.extend(STUBS.COUNT);
       FOR i in 1..STUBS.COUNT LOOP
             rids(i) := STUBS(i).XROWID;
@@ -308,46 +308,44 @@ create or replace type body tqbatch as
     IF SELF.STUBS IS NULL OR SELF.STUBS.COUNT = 0 THEN
       RETURN -1;
     ELSE
-      RETURN SELF.STUBS(SELF.STUBS.COUNT).TQROWID;
+      RETURN SELF.STUBS(SELF.STUBS.COUNT).TQUEUE_ID;
     END IF;
   END;
---  
+--
   MEMBER FUNCTION FIRSTTQ RETURN INT IS
   BEGIN
     IF SELF.STUBS IS NULL OR SELF.STUBS.COUNT = 0 THEN
       RETURN -1;
     ELSE
-      RETURN SELF.STUBS(1).TQROWID;
-    END IF;  
+      RETURN SELF.STUBS(1).TQUEUE_ID;
+    END IF;
   END;
---  
-  MEMBER PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR) IS
+--
+  MEMBER PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR) IS  -- , droppedStubs IN TQSTUB_ARR
     rids XROWIDS := new XROWIDS();
-  BEGIN  
+  BEGIN
+    --SELF.DSTUBS := droppedStubs;
     IF lockedStubs IS NULL OR lockedStubs.COUNT = 0 THEN
       SELF.STUBS := new TQSTUB_ARR();
       SELF.ROWIDS := new XROWIDS();
       SELF.TCOUNT := 0;
       SELF.FIRST_T := -1;
-      SELF.LAST_T := -1;          
-    ELSE 
+      SELF.LAST_T := -1;
+    ELSE
       SELF.STUBS := lockedStubs;
       rids.extend(SELF.STUBS.COUNT);
       FOR i in 1..SELF.STUBS.COUNT LOOP
         rids(i) := SELF.STUBS(i).XROWID;
       END LOOP;
-      SELF.ROWIDS := rids;    
+      SELF.ROWIDS := rids;
       SELF.TCOUNT := SELF.STUBS.COUNT;
       SELF.FIRST_T := SELF.FIRSTTQ;
-      SELF.LAST_T := SELF.LASTTQ;    
+      SELF.LAST_T := SELF.LASTTQ;
     END IF;
   END;
 END;
 /
 
-CREATE TABLE READYTQBATCH OF TQBATCH (BATCH_ID PRIMARY KEY)
-  NESTED TABLE STUBS STORE AS stubs_tab
-  NESTED TABLE ROWIDS STORE AS rowids_tab;
 
 
 --------------------------------------------------------
@@ -475,7 +473,6 @@ BEGIN
     RETURN;
   END IF;
 */
-  LOGEVENT('CALLBACK:' || ntfnds.transaction_id);
   events := TQV.HANDLE_CHANGE(ntfnds);
   DBMS_ALERT.SIGNAL ('TQSTUB.ALERT.EVENT', TO_CHAR(events));
   COMMIT;
@@ -483,9 +480,7 @@ BEGIN
     EXCEPTION
     WHEN TARGET_CHANGED THEN
       BEGIN
-        LOGEVENT('RE-EXECUTING....');
         EXECUTE IMMEDIATE 'BEGIN TQV.HANDLE_CHANGE(:1); WHEN OTHERS THEN DECLARE errm VARCHAR2(2000) := SQLERRM;errc NUMBER := SQLCODE; BEGIN LOGEVENT(''CALLBACK ERROR: ['' || errm || ''] - '' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc); END;' USING ntfnds;
-        LOGEVENT('RE-EXECUTE SUCCESSFUL');
       END;
     WHEN OTHERS THEN
       DECLARE

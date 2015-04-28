@@ -1,20 +1,33 @@
-
+Declare
+  idx NUMBER := 0;
 Begin  
   Execute Immediate 'truncate table event';
-  Execute Immediate 'truncate table tqueue';
-  Execute Immediate 'truncate table tqstubs';
-  /*  
-  TESTDATA.GENACCTS();
-  COMMIT;
-  TESTDATA.GENSECS();
+  --Execute Immediate 'truncate table tqueue';
+  --Execute Immediate 'truncate table tqstubs';
+  SELECT COUNT(*) INTO IDX FROM ACCOUNT;
+  IF IDX < 1000 THEN
+    TESTDATA.GENACCTS(1000-IDX);
+    COMMIT;
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'ACCOUNT', estimate_percent => 100);
+  END IF;
+  SELECT COUNT(*) INTO IDX FROM SECURITY;
+  IF IDX < 10000 THEN
+    TESTDATA.GENSECS(10000-IDX);
+    COMMIT;
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'SECURITY', estimate_percent => 100);
+  END IF;
   COMMIT;  
   DBMS_OUTPUT.PUT_LINE(TESTDATA.FORCELOADCACHE);
-  */
-  --FOR i in 1..100 LOOP
+  FOR i in 1..200 LOOP
     Testdata.Gentrades(10000);
-  --END LOOP;
-  Commit;
+    --DBMS_OUTPUT.PUT_LINE('Loop ' || i);
+    DBMS_LOCK.SLEEP(1);
+    Commit;
+  END LOOP;
+  DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'TQUEUE', estimate_percent => 100);  
 End;
+
+
 
 
 select * from event order by event_id desc
