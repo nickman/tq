@@ -112,7 +112,7 @@ create or replace PACKAGE TQV AS
   -- Deletes all the stubs for a batch by the passed rowids
   PROCEDURE FINISHBATCH(batchRowids IN XROWIDS);
 
-  PROCEDURE RUNBATCH(batchId IN INT, lockName IN VARCHAR2);
+  -- PROCEDURE RUNBATCH(batchId IN INT, lockName IN VARCHAR2);
 
   -- Updates the trades in a batch
   --PROCEDURE UPDATEBATCH(batch IN TQBATCH);

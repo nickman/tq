@@ -85,8 +85,8 @@ public class ConnectionPool {
 		config.setDriverClassName("oracle.jdbc.OracleDriver");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//tporacle:1521/ORCL");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//leopard:1521/XE");
-		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
-		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
+		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
 		config.setUsername("tqreactor");
 		config.setPassword("tq");
 		config.addDataSourceProperty("cachePrepStmts", "true");

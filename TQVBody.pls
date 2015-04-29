@@ -597,6 +597,7 @@ create or replace PACKAGE BODY TQV AS
     );
   END FINISHBATCH;
 
+  /*
   PROCEDURE RUNBATCH(batchId IN INT, lockName IN VARCHAR2) IS
     tqb TQBATCH := NULL;
     trades TQTRADE_ARR := NULL;
@@ -614,6 +615,7 @@ create or replace PACKAGE BODY TQV AS
     SAVETRADES(trades, tqb.BATCH_ID);
     FINISHBATCH(tqb.ROWIDS);
   END RUNBATCH;
+  */
 
 --
   -- *******************************************************
