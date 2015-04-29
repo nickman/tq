@@ -28,9 +28,13 @@ import java.lang.management.ManagementFactory;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Iterator;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import oracle.jdbc.OracleCallableStatement;
 import oracle.jdbc.OracleConnection;
@@ -42,8 +46,15 @@ import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Logger;
 
 import reactor.Environment;
+import reactor.core.config.DispatcherType;
+import reactor.core.dispatch.wait.ParkWaitStrategy;
+import reactor.core.processor.RingBufferWorkProcessor;
 import reactor.fn.Consumer;
 import reactor.fn.Function;
+import reactor.fn.Predicate;
+import reactor.rx.Stream;
+import reactor.rx.Streams;
+import reactor.rx.action.Control;
 import reactor.rx.broadcast.Broadcaster;
 import reactor.rx.stream.GroupedStream;
 import tqueue.db.types.TQBATCH;
@@ -102,13 +113,33 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	/** The ID of the last trade batched and retrieved */
 	private int lastTradeQueueId = 0;
 	/** The poller's maximum number of trades to retrieve in one loop */
-	private int maxRows = 1000;
+	private int maxRows = 10000;
 	/** The poller's maximum batch size */
-	private int maxBatchSize = 10;
+	private int maxBatchSize = 1000;
 	/** The poller's wait period in seconds when waiting for the next rows to become available */
 	private int pollWaitTime = 10;
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
 	private int pollWaitLoops = 10;
+	
+	protected final AtomicLong gBatchCounter = new AtomicLong(0);
+	
+	/** The thread factory for the ring buffer's executor service */
+	protected final ThreadFactory tf = new ThreadFactory() {
+		final AtomicInteger serial = new AtomicInteger(0);
+		public Thread newThread(final Runnable r) {
+			Thread t = new Thread(r, "TQReactorThread#" + serial.incrementAndGet());
+			t.setDaemon(true);
+			return t;
+		}
+	};
+	/** The thread pool for the ring buffer */
+	protected ThreadPoolExecutor tpe = null;
+	
+	/** The ring buffer */
+	protected RingBufferWorkProcessor<TQBATCH> ringBuffer = null;
+	
+	
+	
 	
 	/** Poller thread serial */
 	private final AtomicInteger threadSerial = new AtomicInteger(0);
@@ -202,41 +233,159 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 		}
 	}
 	
+	final Function<TQBATCH, Integer> groupFunction = new Function<TQBATCH, Integer>() {
+		@Override
+		public Integer apply(final TQBATCH t) {
+			try {
+				return t.getAccount()%CORES;
+			} catch (Exception ex) {
+				throw new RuntimeException(ex);
+			} 
+		}		
+	};
+	
+	
+	
+	Consumer<TQBATCH> batchConsumer(final Integer key) {
+		return new Consumer<TQBATCH>() {
+			@Override
+			public void accept(final TQBATCH batch) {					
+				try {
+					final long id = gBatchCounter.incrementAndGet();												
+					log.info("Consumed Batch(" + key + ")  [" + id + "]: stubs:" + batch.getTcount() + ", first:" + batch.getFirstT() + ", last:" + batch.getLastT());
+					pending.decrementAndGet();
+					//Thread.currentThread().join(500);
+					
+				} catch (Exception ex) {
+					throw new RuntimeException(ex);
+				}
+			}		
+		};
+	}
+		
+	Consumer<GroupedStream<Integer, TQBATCH>> batchConsumerGrouped() {
+		return new Consumer<GroupedStream<Integer, TQBATCH>>() {		
+		
+			@Override
+			public void accept(final GroupedStream<Integer, TQBATCH> t) {
+				final Integer key = t.key();
+				t.consume(batchConsumer(key));
+			}		
+		};
+	}
+	
+	final Predicate<TQBATCH> acctPred(final int key) {
+		return new Predicate<TQBATCH>() {
+			/**
+			 * {@inheritDoc}
+			 * @see reactor.fn.Predicate#test(java.lang.Object)
+			 */
+			@Override
+			public boolean test(TQBATCH t) {
+				try {
+					return t.getAccount()%CORES==key;
+				} catch (Exception ex) {
+					log.error("AcctPred:", ex);
+					throw new RuntimeException(ex);
+				}
+			}
+		};
+	}
+	
 	/**
 	 * Initializes the TQBatch broadcaster
 	 */
 	protected void initSink() {
-		sink = Broadcaster.create(Environment.get(), Environment.cachedDispatcher());
-		sink			
+		tpe = new ThreadPoolExecutor(12, 24, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
+		tpe.prestartAllCoreThreads();
+		ringBuffer = RingBufferWorkProcessor.create(tpe, 128, new ParkWaitStrategy());		
+		
+//		 Stream<GroupedStream<Integer, TQBATCH>> groupedStreams = Streams.wrap(ringBuffer)
+//			.groupBy(new Function<TQBATCH, Integer>() {
+//				@Override
+//				public Integer apply(final TQBATCH t) {
+//					try {
+//						return t.getAccount()%CORES;
+//					} catch (Exception ex) {
+//						throw new RuntimeException(ex);
+//					} 
+//				}
+//			});
+		
+		Streams.wrap(ringBuffer)
+			.partition(CORES)			
+			.dispatchOn(Environment.cachedDispatcher())
+			.consume(batchConsumerGrouped());
+		 
+//		 for(int i = 0; i < CORES; i++) {
+//			 Consumer<TQBATCH> consumer = batchConsumer();			 
+//			 groupedStreams.consume(new Consumer<GroupedStream<Integer, TQBATCH>>(){
+//				public void accept(GroupedStream<Integer, TQBATCH> t) {
+//					Streams.just(t)
+//						.dispatchOn(Environment.cachedDispatcher());
+//				}
+//			 });
+//			 	
+//		 }
 			
-			.groupBy(new Function<TQBATCH, Integer>() {
-				@Override
-				public Integer apply(final TQBATCH t) {
-					try {
-						return t.getAccount()%CORES;
-					} catch (Exception ex) {
-						throw new RuntimeException(ex);
-					} 
-				}
-			})
-			.consume(new Consumer<GroupedStream<Integer, TQBATCH>>(){
-				@Override
-				public void accept(final GroupedStream<Integer, TQBATCH> t) {
-					final Integer key = t.key();
-					t.consume(new Consumer<TQBATCH>() {
-						@Override
-						public void accept(final TQBATCH batch) {					
-							try {
-								log.info("Consumed Batch [" + key + "]: stubs:" + batch.getTcount() + ", last:" + batch.getLastT());
-								Thread.currentThread().join(500);
-								
-							} catch (Exception ex) {
-								throw new RuntimeException(ex);
-							}
-						}
-					});
-				}
-			});
+		
+//		for(int i = 0; i < CORES; i++) {
+//			s.filter(acctPred(i))
+//			.dispatchOn(Environment.newDispatcher("part" + i , 128, 1, DispatcherType.MPSC))
+//			.consume(batchConsumer);
+//		}
+		
+				
+//				Control ctx = Streams.wrap(ringBuffer)
+//				.partition()
+//				.observe(new Consumer<TQBATCH>() {
+//					public void accept(TQBATCH t) {
+//						pending.decrementAndGet();						
+//					}
+//				})
+//				.groupBy(groupFunction)
+//				.consume(batchConsumerGrouped);
+				
+//				ctx.start();
+//				.dispatchOn(Environment.newDispatcher("TQBATCH Consumer" , 128, 1, DispatcherType.MPSC))
+				
+				
+				
+				
+//		
+		
+		sink = Broadcaster.create(Environment.get(), Environment.cachedDispatcher());
+		
+		
+//			.groupBy(new Function<TQBATCH, Integer>() {
+//				@Override
+//				public Integer apply(final TQBATCH t) {
+//					try {
+//						return t.getAccount()%CORES;
+//					} catch (Exception ex) {
+//						throw new RuntimeException(ex);
+//					} 
+//				}
+//			})
+//			.consume(new Consumer<GroupedStream<Integer, TQBATCH>>(){
+//				@Override
+//				public void accept(final GroupedStream<Integer, TQBATCH> t) {
+//					final Integer key = t.key();
+//					t.consume(new Consumer<TQBATCH>() {
+//						@Override
+//						public void accept(final TQBATCH batch) {					
+//							try {
+//								log.info("Consumed Batch [" + key + "]: stubs:" + batch.getTcount() + ", last:" + batch.getLastT());
+//								Thread.currentThread().join(500);
+//								
+//							} catch (Exception ex) {
+//								throw new RuntimeException(ex);
+//							}
+//						}
+//					});
+//				}
+//			});
+		ringBuffer.subscribe(sink);
 		
 		log.info("Sink created");		
 	}
@@ -250,8 +399,12 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	public void run() {
 		while(started.get()) {
 			try {
-				while(pending.get()!=0) {
-					Thread.yield();
+				if(pending.get()!=0) {
+//					log.info("Waiting on pending");
+//					while(pending.get()!=0) {
+//						Thread.yield();
+//					}
+//					log.info("Pending complete");
 				}
 				pollerPs.setInt(1, this.startId.get());
 				pollerPs.setInt(2, maxRows);
@@ -290,7 +443,10 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 					batchCount++;
 					stubCount += postBatch.getTcount();
 					pollerConnection.commit();
-					sink.onNext(postBatch);
+					pending.incrementAndGet();
+					ringBuffer.onNext(postBatch);
+					
+					//sink.onNext(postBatch);
 				}
 				if(batchCount>0 | dropCount>0) {
 				log.info(new StringBuilder("Polling loop: batches:")

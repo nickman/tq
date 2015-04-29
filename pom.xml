@@ -22,7 +22,7 @@
 		<log4j.version>1.2.16</log4j.version>
 		<hikari.version>2.3.6</hikari.version>
 		<metrics.version>4.0.0-SNAPSHOT</metrics.version>
-		<reactor.version>2.0.0.RC1</reactor.version>
+		<reactor.version>2.0.0.RELEASE</reactor.version>
 		<slf4j.version>1.7.7</slf4j.version>
 		<!-- Plugin Versions -->
 		<jar-plugin.version>2.3</jar-plugin.version>
@@ -35,6 +35,12 @@
 		<shade.version>2.1</shade.version>
 	</properties>
 	
+	<repositories>
+		<repository>
+		<id>spring</id>
+		<url>http://repo.spring.io/libs-release</url>
+		</repository>
+	</repositories>
 	
 	<dependencies>
 	
@@ -87,6 +93,12 @@
 			<version>${reactor.version}</version>
 		</dependency>
 
+		<!--  -->
+		<dependency>
+			<groupId>io.projectreactor</groupId>
+			<artifactId>reactor-stream</artifactId>
+			<version>${reactor.version}</version>
+		</dependency>
 
 		<dependency>
 			<groupId>log4j</groupId>
