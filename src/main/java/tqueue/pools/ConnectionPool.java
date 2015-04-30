@@ -30,16 +30,19 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import javax.sql.DataSource;
 
-import oracle.sql.ORAData;
-
 import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 
-import tqueue.db.types.JTQSTUB;
+import tqueue.db.types.TQBATCH;
 import tqueue.db.types.TQSTUB;
 import tqueue.db.types.TQSTUB_ARR;
+import tqueue.db.types.TQTRADE;
+import tqueue.db.types.TQTRADE_ARR;
+import tqueue.db.types.XROWIDS;
 
+import com.codahale.metrics.JmxReporter;
+import com.codahale.metrics.MetricRegistry;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import com.zaxxer.hikari.proxy.ConnectionProxy;
@@ -63,6 +66,9 @@ public class ConnectionPool {
 	private final Map<String, Class<?>> typeMap = new ConcurrentHashMap<String, Class<?>>();
 	
 	final HikariDataSource dataSource;
+	final MetricRegistry registry;
+	final JmxReporter reporter;
+	
 	
 	public static ConnectionPool getInstance() {
 		if(instance==null) {
@@ -75,18 +81,32 @@ public class ConnectionPool {
 		return instance;
 	}
 	
+	
+	public MetricRegistry getMetricRegistry() {
+		return registry;
+	}
+	
 	private ConnectionPool() {
+		registry = new MetricRegistry();
+		reporter = JmxReporter.forRegistry(registry).build();
+		reporter.start();
 		// ==== known type mappings 
 		typeMap.put(TQSTUB._SQL_NAME, TQSTUB.class);
-		typeMap.put(JTQSTUB._SQL_NAME, JTQSTUB.class);
 		typeMap.put(TQSTUB_ARR._SQL_NAME, TQSTUB_ARR.class);
+		typeMap.put(TQTRADE._SQL_NAME, TQTRADE.class);
+		typeMap.put(TQTRADE_ARR._SQL_NAME, TQTRADE_ARR.class);
+		typeMap.put(TQBATCH._SQL_NAME, TQBATCH.class);
+		typeMap.put(XROWIDS._SQL_NAME, XROWIDS.class);
+
+		
 		// ==== known type mappings 
 		HikariConfig config = new HikariConfig();
 		config.setDriverClassName("oracle.jdbc.OracleDriver");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//tporacle:1521/ORCL");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//leopard:1521/XE");
-		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
-		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
+		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		config.setMetricRegistry(registry);
+		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
 		config.setUsername("tqreactor");
 		config.setPassword("tq");
 		config.addDataSourceProperty("cachePrepStmts", "true");
@@ -98,6 +118,7 @@ public class ConnectionPool {
 		config.setConnectionTimeout(1002);
 		config.setAutoCommit(false);
 		config.setRegisterMbeans(true);
+		config.setPoolName("TQReactorPool");
 		dataSource = new HikariDataSource(config);	
 		Logger.getLogger(com.zaxxer.hikari.pool.HikariPool.class).setLevel(Level.WARN);
 	}

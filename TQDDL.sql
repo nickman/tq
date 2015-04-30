@@ -208,18 +208,10 @@ CREATE OR REPLACE TYPE TQSTUB FORCE AS OBJECT (
   SECURITY_TYPE             CHAR(1),            -- The type of the security
   ACCOUNT_ID                INT,                -- The ID of the account
   BATCH_ID                  INT,                -- The batch id assigned when a batch is locked 
-  BATCH_TS                  TIMESTAMP,           -- The timestamp when the batch id was assigned
-  MAP MEMBER FUNCTION GET_TRADEQUEUE_ID RETURN NUMBER
+  BATCH_TS                  TIMESTAMP           -- The timestamp when the batch id was assigned
 );
 /
 
-CREATE OR REPLACE TYPE BODY TQSTUB AS
-    MAP MEMBER FUNCTION GET_TRADEQUEUE_ID RETURN NUMBER IS
-    BEGIN
-      RETURN TQUEUE_ID;
-    END;
-  END;
-/    
 
 
 CREATE OR REPLACE TYPE TQSTUB_ARR FORCE AS TABLE OF TQSTUB;
@@ -234,117 +226,10 @@ create or replace TYPE TQBATCH FORCE AS OBJECT (
   LAST_T            INT,
   BATCH_ID          INT,
   ROWIDS            XROWIDS,
-  STUBS             TQSTUB_ARR,
-  MEMBER PROCEDURE SETXIDS,
-  MEMBER PROCEDURE SETXIDS(rowids IN XROWIDS),
-  MEMBER FUNCTION XIDS RETURN XROWIDS,
-  MEMBER FUNCTION TXIDS RETURN XROWIDS,
-  MEMBER FUNCTION LASTTQ RETURN INT,
-  MEMBER FUNCTION FIRSTTQ RETURN INT,
-  MEMBER PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR),
-  MAP MEMBER FUNCTION GET_FIRST_TRADEQUEUE_ID RETURN NUMBER
+  STUBS             TQSTUB_ARR
 );
 /
 
---------------------------------------------------------
---  TQBatch Body
---------------------------------------------------------
-create or replace type body tqbatch as
-  MAP MEMBER FUNCTION GET_FIRST_TRADEQUEUE_ID RETURN NUMBER IS
-  BEGIN
-    return FIRST_T;
-  END;
-  --
-  MEMBER PROCEDURE SETXIDS IS
-    rids XROWIDS := new XROWIDS();
-  BEGIN
-    IF SELF.ROWIDS IS NULL THEN
-      rids.extend(STUBS.COUNT);
-      FOR i in 1..STUBS.COUNT LOOP
-            rids(i) := STUBS(i).XROWID;
-      END LOOP;
-      SELF.ROWIDS := rowids;
-    END IF;
-  END;
-  --
-  MEMBER PROCEDURE SETXIDS(rowids IN XROWIDS) IS
-    BEGIN
-    IF SELF.ROWIDS IS NULL THEN
-      IF rowids IS NOT NULL THEN
-        IF rowids.COUNT = SELF.STUBS.COUNT THEN
-          SELF.ROWIDS := rowids;
-        END IF;
-      END IF;
-    END IF;
-  END;
-  --
-  MEMBER FUNCTION TXIDS RETURN XROWIDS IS
-    rids XROWIDS := new XROWIDS();
-  BEGIN
-    rids.EXTEND(STUBS.COUNT);
-    FOR i in 1..STUBS.COUNT LOOP
-      rids(i) := STUBS(i).TQROWID;
-    END LOOP;
-    RETURN rids;
-  END;
---
-  MEMBER FUNCTION XIDS RETURN XROWIDS IS
-    rids XROWIDS := new XROWIDS();
-  BEGIN
-    IF SELF.ROWIDS IS NULL THEN
-      rids := new XROWIDS();
-      rids.extend(STUBS.COUNT);
-      FOR i in 1..STUBS.COUNT LOOP
-            rids(i) := STUBS(i).XROWID;
-      END LOOP;
-      RETURN rids;
-    ELSE
-      return SELF.ROWIDS;
-    END IF;
-  END;
---
-  MEMBER FUNCTION LASTTQ RETURN INT IS
-  BEGIN
-    IF SELF.STUBS IS NULL OR SELF.STUBS.COUNT = 0 THEN
-      RETURN -1;
-    ELSE
-      RETURN SELF.STUBS(SELF.STUBS.COUNT).TQUEUE_ID;
-    END IF;
-  END;
---
-  MEMBER FUNCTION FIRSTTQ RETURN INT IS
-  BEGIN
-    IF SELF.STUBS IS NULL OR SELF.STUBS.COUNT = 0 THEN
-      RETURN -1;
-    ELSE
-      RETURN SELF.STUBS(1).TQUEUE_ID;
-    END IF;
-  END;
---
-  MEMBER PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR) IS  -- , droppedStubs IN TQSTUB_ARR
-    rids XROWIDS := new XROWIDS();
-  BEGIN
-    --SELF.DSTUBS := droppedStubs;
-    IF lockedStubs IS NULL OR lockedStubs.COUNT = 0 THEN
-      SELF.STUBS := new TQSTUB_ARR();
-      SELF.ROWIDS := new XROWIDS();
-      SELF.TCOUNT := 0;
-      SELF.FIRST_T := -1;
-      SELF.LAST_T := -1;
-    ELSE
-      SELF.STUBS := lockedStubs;
-      rids.extend(SELF.STUBS.COUNT);
-      FOR i in 1..SELF.STUBS.COUNT LOOP
-        rids(i) := SELF.STUBS(i).XROWID;
-      END LOOP;
-      SELF.ROWIDS := rids;
-      SELF.TCOUNT := SELF.STUBS.COUNT;
-      SELF.FIRST_T := SELF.FIRSTTQ;
-      SELF.LAST_T := SELF.LASTTQ;
-    END IF;
-  END;
-END;
-/
 
 
 

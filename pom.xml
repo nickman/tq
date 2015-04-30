@@ -44,28 +44,6 @@
 	
 	<dependencies>
 	
-
-	
-<!-- 		
-		<dependency>
-		  <groupId>org.seleniumhq.selenium</groupId>
-		  <artifactId>selenium-server-standalone</artifactId>
-		  <version>2.0b3</version>
-		</dependency>
-
-		<dependency>
-		  <groupId>org.seleniumhq.selenium</groupId>
-		  <artifactId>selenium-chrome-driver</artifactId>
-		  <version>2.43.1</version>
-		</dependency>
-		
-		<dependency>
-		  <groupId>org.seleniumhq.selenium</groupId>
-		  <artifactId>selenium-server</artifactId>
-		  <version>2.43.1</version>
-		</dependency>
-		
- -->		
 	
 		<!--   TEST   -->
 		<dependency>
@@ -146,6 +124,12 @@
 		  <version>${high-scale-lib.version}</version>
 		</dependency>
 			
+        <dependency>
+            <groupId>io.dropwizard.metrics</groupId>
+            <artifactId>metrics-core</artifactId>
+            <version>${metrics.version}</version>            
+        </dependency>
+			
 		
 	</dependencies>
 	<build>
@@ -161,7 +145,7 @@
 			    <downloadSources>true</downloadSources>
 			    <classpathContainers>
 				<classpathContainer>
-			org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-1.7
+			org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/jdk1.8.0
 				</classpathContainer>
 			    </classpathContainers>
 			</configuration>

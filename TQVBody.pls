@@ -30,6 +30,40 @@ create or replace PACKAGE BODY TQV AS
   -- ==== done ====
   -- =====================================================================
 
+  FUNCTION CS(arr IN TQSTUB_ARR) RETURN INT IS
+  BEGIN
+    IF arr IS NOT NULL THEN
+      RETURN arr.COUNT;
+    ELSE
+      RETURN 0;
+    END IF;
+  END CS;
+  
+  FUNCTION BATCHTXIDS(tqbatch IN TQBATCH) RETURN XROWIDS IS
+    rids XROWIDS := new XROWIDS();
+  BEGIN
+    rids.EXTEND(tqbatch.STUBS.COUNT);
+    FOR i in 1..tqbatch.STUBS.COUNT LOOP
+      rids(i) := tqbatch.STUBS(i).TQROWID;
+    END LOOP;
+    RETURN rids;
+  END BATCHTXIDS;
+--
+  FUNCTION BATCHXIDS(tqbatch IN TQBATCH) RETURN XROWIDS IS
+    rids XROWIDS := new XROWIDS();
+  BEGIN
+    IF tqbatch.ROWIDS IS NULL THEN
+      rids := new XROWIDS();
+      rids.extend(tqbatch.STUBS.COUNT);
+      FOR i in 1..tqbatch.STUBS.COUNT LOOP
+            rids(i) := tqbatch.STUBS(i).XROWID;
+      END LOOP;
+      RETURN rids;
+    ELSE
+      return tqbatch.ROWIDS;
+    END IF;
+  END BATCHXIDS;
+  
 
 
   -- *******************************************************
@@ -198,7 +232,7 @@ create or replace PACKAGE BODY TQV AS
         PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
     END IF;
   END TRADEBATCH;
---  
+--
   -- **************************************************************
   --    Waits on a CQN activity complete event
   -- **************************************************************
@@ -210,10 +244,10 @@ create or replace PACKAGE BODY TQV AS
   BEGIN
     DBMS_ALERT.REGISTER('TQSTUB.ALERT.EVENT');
     DBMS_ALERT.WAITONE('TQSTUB.ALERT.EVENT', message, status, WAIT_TIME);
-    IF status = 1 THEN 
-      events := 0; 
-    ELSIF status = 0 THEN 
-      events := TO_NUMBER(RTRIM(LTRIM(message)));      
+    IF status = 1 THEN
+      events := 0;
+    ELSIF status = 0 THEN
+      events := TO_NUMBER(RTRIM(LTRIM(message)));
     END IF;
     DBMS_ALERT.REMOVE('TQSTUB.ALERT.EVENT');
     return events;
@@ -350,6 +384,29 @@ create or replace PACKAGE BODY TQV AS
       COMMIT;
       RETURN FALSE;
   END LOCKSTUB;
+  
+  PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR, tqbatch IN OUT TQBATCH) IS  -- , droppedStubs IN TQSTUB_ARR
+    rids XROWIDS := new XROWIDS();
+  BEGIN
+    --SELF.DSTUBS := droppedStubs;
+    IF lockedStubs IS NULL OR lockedStubs.COUNT = 0 THEN
+      tqbatch.STUBS := new TQSTUB_ARR();
+      tqbatch.ROWIDS := new XROWIDS();
+      tqbatch.TCOUNT := 0;
+      tqbatch.FIRST_T := -1;
+      tqbatch.LAST_T := -1;
+    ELSE
+      tqbatch.STUBS := lockedStubs;
+      rids.extend(tqbatch.STUBS.COUNT);
+      FOR i in 1..tqbatch.STUBS.COUNT LOOP
+        rids(i) := tqbatch.STUBS(i).XROWID;
+      END LOOP;
+      tqbatch.ROWIDS := rids;
+      tqbatch.TCOUNT := CS(tqbatch.STUBS);
+      tqbatch.FIRST_T := tqbatch.STUBS(1).TQUEUE_ID;
+      tqbatch.LAST_T := tqbatch.STUBS(tqbatch.TCOUNT).TQUEUE_ID;
+    END IF;
+  END UPDATE_STUBS;
 --
   -- *******************************************************
   --    Lock all rows in a batch
@@ -379,14 +436,14 @@ create or replace PACKAGE BODY TQV AS
     IF commitTX != 0 THEN
       COMMIT;
     END IF;
-    batch.UPDATE_STUBS(lockedStubs);
+    UPDATE_STUBS(lockedStubs, batch);
   END LOCKBATCH;
-  
+
   PROCEDURE LOCKBATCH(batch IN OUT TQBATCH) IS
   BEGIN
     LOCKBATCH(batch, 1);
   END LOCKBATCH;
-  
+
 --
   -- *******************************************************
   --    Lock all rows in all passed batches
@@ -401,14 +458,6 @@ create or replace PACKAGE BODY TQV AS
     END LOOP;
   END LOCKBATCHES;
 
-  FUNCTION CS(arr IN TQSTUB_ARR) RETURN INT IS
-  BEGIN
-    IF arr IS NOT NULL THEN
-      RETURN arr.COUNT;
-    ELSE
-      RETURN 0;
-    END IF;
-  END CS;
 
 
   -- *******************************************************
@@ -438,8 +487,8 @@ create or replace PACKAGE BODY TQV AS
     FORALL i in 1..lockedStubs.COUNT
         UPDATE TQSTUBS SET BATCH_ID = batch.BATCH_ID, BATCH_TS = now
         WHERE ROWID = CHARTOROWID(lockedStubs(i).XROWID);
-    
-    batch.UPDATE_STUBS(lockedStubs);
+
+    UPDATE_STUBS(lockedStubs, batch);
   END RELOCKBATCH;
 
   -- *******************************************************
@@ -450,8 +499,8 @@ create or replace PACKAGE BODY TQV AS
     trades TQTRADE_ARR;
     lockedTrades TQTRADE_ARR;
     droppedTrades TQTRADE_ARR;
-    tradeRowIds XROWIDS := tqbatch.TXIDS;
-    stubRowIds XROWIDS := tqbatch.XIDS;
+    tradeRowIds XROWIDS := BATCHTXIDS(tqbatch);
+    stubRowIds XROWIDS := BATCHXIDS(tqbatch);
     lockedRids XROWIDS;
     locked int := 0;
     dropped int := 0;
@@ -461,7 +510,7 @@ create or replace PACKAGE BODY TQV AS
     stubRowids XROWIDS;
     updatedStubs TQSTUB_ARR;
     droppedStubs TQSTUB_ARR;
-    
+
     TRADE_STUB_MISMATCH EXCEPTION;
     PRAGMA EXCEPTION_INIT( TRADE_STUB_MISMATCH, -20001 );
 
@@ -526,13 +575,13 @@ create or replace PACKAGE BODY TQV AS
           WHERE T.TQROWID NOT IN (
             SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(lockedRids)
           );
-          tqbatch.UPDATE_STUBS(updatedStubs);
+          UPDATE_STUBS(updatedStubs, tqbatch);
           locked := tqbatch.ROWIDS.COUNT;
           dropped := CS(droppedStubs);
-          
+
           LOGEVENT('SINGLE LOCK RESULTS:  locked:[' || locked || '], dropped:[' || dropped || ']');
-          
-          
+
+
           IF  (tqbatch.ROWIDS.COUNT != lockedTrades.COUNT) OR (tqbatch.STUBS.COUNT != lockedTrades.COUNT)   THEN
             raise_application_error( -20001, 'Single Row Lock Mismatch. Locked Trades: [' || lockedTrades.COUNT ||'], Locked Stubs: [' || tqbatch.STUBS.COUNT || '], Locked ROWIDS: [' || tqbatch.ROWIDS.COUNT || ']');
           END IF;
@@ -543,7 +592,7 @@ create or replace PACKAGE BODY TQV AS
                 WHERE ROWID = CHARTOROWID(droppedStubs(i).XROWID);
           END IF;
 
-          
+
           --tqbatch.UPDATE_TRADES(lockedTrades, droppedTrades);
           RETURN lockedTrades;
         END;
@@ -762,7 +811,7 @@ create or replace PACKAGE BODY TQV AS
     aIdx          PLS_INTEGER := 0;
 
     batchId       NUMBER := NULL;
-    
+
     totalChanges NUMBER := 0;
 
   BEGIN

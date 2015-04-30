@@ -24,6 +24,10 @@
  */
 package tqueue.reactor;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.lang.management.ManagementFactory;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -65,6 +69,11 @@ import tqueue.db.types.TQBATCH;
 import tqueue.db.types.TQTRADE;
 import tqueue.db.types.TQTRADE_ARR;
 import tqueue.pools.ConnectionPool;
+
+import com.codahale.metrics.Gauge;
+import com.codahale.metrics.Histogram;
+import com.codahale.metrics.Meter;
+import com.codahale.metrics.MetricRegistry;
 
 /**
  * <p>Title: TQReactor</p>
@@ -129,7 +138,11 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	/** The trade poller's active result set */
 	private OracleResultSet pollerRset = null;	
 	/** The trade poller's TQBATCH OraDataFactory */
-	private final ORADataFactory tqBatchOraDataFactory = TQBATCH.getORADataFactory();
+	private final ORADataFactory tqBatchOraDataFactory;
+	/** The trade poller's TQTRADE OraDataFactory */
+	private final ORADataFactory tradeOraDataFactory;
+	/** The trade poller's TQTRADE_ARR OraDataFactory */
+	private final ORADataFactory tradeArrBatchOraDataFactory;
 	
 	/** The ID of the last trade batched and retrieved */
 	private int lastTradeQueueId = 0;
@@ -142,7 +155,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
 	private int pollWaitLoops = 10;
 	/** The number of parallel streams to run per core */
-	private int streamsPerCore = 3;
+	private int streamsPerCore = 1;
 	protected final AtomicLong gBatchCounter = new AtomicLong(0);
 	
 	Control ctx = null;
@@ -171,6 +184,22 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	private final AtomicInteger startId = new AtomicInteger(0);
 	/** The numnber of pending tasks in the current loop */
 	private final AtomicInteger pending = new AtomicInteger(0);
+	
+	/** The metric registry */
+	private final MetricRegistry registry;
+	
+	/** The inflight gauge */
+	private final AtomicInteger inFlight = new AtomicInteger(0);
+	/** A meter of trades per/s */
+	private final Meter tradesPerSec;
+	/** A meter of batches per/s */
+	private final Meter batchesPerSec;
+	/** A histogram of batch sizes (trades per batch) */
+	private final Histogram avgBatchSize;
+	/** A histogram of serialized TQBATCH sizes */
+	private final Histogram avgTQBatchByteSize;
+	/** A histogram of TQBATCH ser/deser times in ms. */
+	private final Histogram avgSerDeserTime;
 	
 
 	/** The started flag */
@@ -215,6 +244,49 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 			}
 		});
 		connPool = ConnectionPool.getInstance();
+		tqBatchOraDataFactory = TQBATCH.getORADataFactory();
+		tradeArrBatchOraDataFactory = TQTRADE_ARR.getORADataFactory();
+		tradeOraDataFactory = TQTRADE.getORADataFactory();
+		registry = connPool.getMetricRegistry();
+		//inFlight = connPool.getInflightGauge();
+		final Gauge<Integer> inFlightGauge = new Gauge<Integer>() {
+			@Override
+			public Integer getValue() {				
+				return inFlight.get();
+			}
+		};
+		final Gauge<Integer> startIdGauge = new Gauge<Integer>() {
+			@Override
+			public Integer getValue() {				
+				return startId.get();
+			}
+		};
+		
+		registry.register("InFlightBatches", inFlightGauge);
+		registry.register("StartingId", startIdGauge);
+//		/** A meter of trades per/s */
+//		private final Meter tradesPerSec;
+//		/** A meter of batches per/s */
+//		private final Meter batchesPerSec;
+//		/** A histogram of batch sizes (trades per batch) */
+//		private final Histogram avgBatchSize;
+		tradesPerSec = registry.meter("tradesPerSec");
+		batchesPerSec = registry.meter("batchesPerSec");
+		avgBatchSize = registry.histogram("avgBatchSize");
+		
+//		/** A histogram of serialized TQBATCH sizes */
+//		private final Histogram avgTQBatchByteSize;
+//		/** A histogram of TQBATCH ser/deser times in ms. */
+//		private final Histogram avgSerDeserTime;
+		
+		avgTQBatchByteSize = registry.histogram("avgTQBatchByteSize");
+		avgSerDeserTime = registry.histogram("avgSerDeserTime");
+		
+		
+		
+		
+		
+		
 	}
 	
 	@Override
@@ -286,10 +358,16 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 				try {
 					final long id = gBatchCounter.incrementAndGet();		
 //					if(key==3) {
-						log.info("Consumed Batch(" + key + ")  [" + id + "]: stubs:" + batch.getTcount() + ", first:" + batch.getFirstT() + ", last:" + batch.getLastT());
+//						log.info("Consumed Batch(" + key + ")  [" + id + "]: stubs:" + batch.getTcount() + ", first:" + batch.getFirstT() + ", last:" + batch.getLastT());
 //					}
-					processBatch(batch);
+					final int tcount = batch.getTcount();
+					tradesPerSec.mark(tcount);
+					batchesPerSec.mark();
+					avgBatchSize.update(tcount);
+
+					processBatch(ser(batch));
 					pending.decrementAndGet();
+					inFlight.decrementAndGet();
 					
 					
 				} catch (Exception ex) {
@@ -352,12 +430,22 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 			
 		}
 		ctx = Streams.wrap(ringBuffer)
+			.observe(t -> {
+				inFlight.incrementAndGet();
+//				try {
+//					log.info("Batch [" + t.getAccount() + " / " + t.getBatchId() + "] is in flight");
+//				} catch (Exception ex) {
+//					log.error("Infligh Observer Exception", ex);
+//					throw new RuntimeException(ex);
+//				}								
+			})
+			.observeComplete(x -> inFlight.decrementAndGet())
 			.groupBy(groupFunction(totalStreams))
-			.capacity(1)
+			.capacity(1)			
 			.consume(new Consumer<GroupedStream<Integer, TQBATCH>>() {
 				@Override
 				public void accept(final GroupedStream<Integer, TQBATCH> t) {
-					t.consume(groupConsumers.get(t.key()));
+					t.consume(groupConsumers.get(t.key()));					
 				}
 			});
 				
@@ -398,7 +486,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 					if(!started.get()) {
 						break;
 					}
-					TQBATCH preBatch = (TQBATCH)pollerRset.getORAData(1, TQBATCH.getORADataFactory());
+					TQBATCH preBatch = (TQBATCH)pollerRset.getORAData(1, tqBatchOraDataFactory);
 					if(preBatch.getAccount()==-1) {
 						//log.info("Timed out waiting for results");
 						break;
@@ -409,7 +497,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 					pollerCs.setInt(2, 0);
 					
 					pollerCs.execute();
-					TQBATCH postBatch = (TQBATCH)pollerCs.getORAData(1, TQBATCH.getORADataFactory());
+					TQBATCH postBatch = (TQBATCH)pollerCs.getORAData(1, tqBatchOraDataFactory);
 					if(postBatch.getTcount()==0) {
 						continue;
 					}
@@ -432,7 +520,10 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 					.append(", stubs:")
 					.append(stubCount)
 					.append(", drops:")
-					.append(dropCount)					
+					.append(dropCount)
+					.append(", inFlight:")
+					.append(inFlight.get())					
+					
 				);
 				}
 				batchCount = 0;
@@ -496,31 +587,79 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 		pollerConnection = null;		
 	}
 	
+	protected byte[] ser(final TQBATCH batch) {
+		ByteArrayOutputStream baos = null;
+		ObjectOutputStream oos = null;
+		try {
+			baos = new ByteArrayOutputStream(2048);
+			oos = new ObjectOutputStream(baos);
+			oos.writeObject(batch);
+			oos.flush();
+			baos.flush();
+			final byte[] bytes = baos.toByteArray();
+			avgTQBatchByteSize.update(bytes.length);
+			return bytes;
+		} catch (Exception ex) {
+			throw new RuntimeException(ex);
+		} finally {
+			if(baos!=null) try { baos.close(); } catch (Exception ex) {/* No Op */}
+			if(oos!=null) try { oos.close(); } catch (Exception ex) {/* No Op */}
+		}
+	}
+	
+	protected TQBATCH deser(final byte[] bytes, final Connection conn) {
+		ByteArrayInputStream baos = null;
+		ObjectInputStream oos = null;
+		try {			
+			baos = new ByteArrayInputStream(bytes);
+			oos = new ObjectInputStream(baos);
+			TQBATCH batch = (TQBATCH)oos.readObject();
+//			batch.restoreConnection(conn);
+			return batch;			
+		} catch (Exception ex) {
+			throw new RuntimeException(ex);
+		} finally {
+			if(baos!=null) try { baos.close(); } catch (Exception ex) {/* No Op */}
+			if(oos!=null) try { oos.close(); } catch (Exception ex) {/* No Op */}
+		}		
+	}
+	
+	protected TQBATCH serdeser(final TQBATCH batch, final Connection conn) {
+		final long start = System.currentTimeMillis();
+		try {
+			return deser(ser(batch), conn);
+		} finally {
+			avgSerDeserTime.update(System.currentTimeMillis() - start);
+		}
+	}
+	
 	/**
 	 * Processes a batch
 	 * @param batchToProcess The batch to process
 	 */
-	public void processBatch(final TQBATCH batchToProcess) {
+	public void processBatch(final byte[] batchToProcess) {
 		Connection conn = null;
 		OracleConnection oraConn = null;
 		PreparedStatement ps = null;
 		OracleCallableStatement cs = null;
 		ResultSet rs = null;
-		TQBATCH preBatch = batchToProcess;
-
+		TQBATCH preBatch = null;
 		TQBATCH postBatch = null;
 		try {
+			
 			conn = ConnectionPool.getInstance().getConnection();
 			oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);
-
+			preBatch = deser(batchToProcess, conn); //serdeser(batchToProcess, conn);
+			//preBatch.restoreConnection(oraConn);
 			//===========================================================================================
 			// 	 PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH);
 			//===========================================================================================
 			cs = (OracleCallableStatement)oraConn.prepareCall(RELOCK_BATCH_SQL);
-			cs.registerOutParameter(1, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);			
-			cs.setORAData(1, preBatch);
+			cs.registerOutParameter(1, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);	
+			cs.setObject(1, preBatch, TQBATCH._SQL_TYPECODE);
+//			cs.setORAData(1, preBatch);
 			cs.execute();
-			postBatch = (TQBATCH)cs.getORAData(1, TQBATCH.getORADataFactory());
+			postBatch = (TQBATCH)cs.getORAData(1, tqBatchOraDataFactory);
 			cs.close();
 			if(postBatch.getTcount() != preBatch.getTcount()) {
 				int dropCount = (preBatch.getTcount() - postBatch.getTcount());
@@ -533,14 +672,15 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 			TQTRADE[] trades = null;
 			cs = (OracleCallableStatement)oraConn.prepareCall(START_BATCH_SQL);
 			
-			cs.registerOutParameter(2, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);			
-			cs.setORAData(2, postBatch);
+			cs.registerOutParameter(2, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);
+			cs.setObject(2, postBatch, TQBATCH._SQL_TYPECODE);
+//			cs.setORAData(2, postBatch);
 			cs.registerOutParameter(2, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);	
 			cs.registerOutParameter(1, TQTRADE_ARR._SQL_TYPECODE, TQTRADE_ARR._SQL_NAME);
 			cs.execute();
 			//return ((TQSTUB_ARR)((OracleCallableStatement)cs).getORAData(2, TQSTUB_ARR.getORADataFactory())).getArray();
 			trades = ((TQTRADE_ARR)cs.getORAData(1, TQTRADE_ARR.getORADataFactory())).getArray();
-			postBatch = (TQBATCH)cs.getORAData(2, TQBATCH.getORADataFactory());
+			postBatch = (TQBATCH)cs.getORAData(2, tqBatchOraDataFactory);
 			cs.close();
 			if(trades.length != postBatch.getRowids().length()) {
 				log.error("Mismatch between trade count [" + trades.length + "] and postBatch stub count [" + postBatch.getRowids().length() + "]. (PreBatch:[" + preBatch.getRowids().length() + "])");
@@ -571,7 +711,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 			cs.execute();
 			cs.close();
 			conn.commit();
-			log.info("Batch Complete");
+			//log.info("Batch Complete");
 		} catch (Exception ex) {
 			log.error("Failed to process batch", ex);
 			throw new RuntimeException("Failed to process batch [" + postBatch + "]", ex);
