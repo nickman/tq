@@ -9,8 +9,8 @@
 	<properties>
   	<!-- Misc -->
  		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
- 		<compiler-source.version>1.7</compiler-source.version>
- 		<compiler-target.version>1.7</compiler-target.version>
+ 		<compiler-source.version>1.8</compiler-source.version>
+ 		<compiler-target.version>1.8</compiler-target.version>
  		<!-- Dependencies --> 
 		<oracle.version>11.2.0.2.0</oracle.version>
 		<guava.version>18.0</guava.version>

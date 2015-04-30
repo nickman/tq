@@ -28,6 +28,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import reactor.Environment;
+import static reactor.Environment.*;
+import reactor.fn.Consumer;
 import reactor.rx.Streams;
 
 /**
@@ -46,6 +49,12 @@ public class RQ {
 	public RQ() {
 		final List<String> startWith = new ArrayList<String>(Arrays.asList("Foo", "Bar", "Crumb"));
 		Streams.from(startWith)
+		.observeComplete(new Consumer<Void>(){
+			@Override
+			public void accept(Void t) {
+				System.out.println("DONE");
+			}
+		})
         .groupBy(s -> s)
         .consume(str -> {
             str.dispatchOn(cachedDispatcher())
@@ -62,6 +71,23 @@ public class RQ {
                           });
                });
         });		
+	}
+	
+	public static void main(String[] args) {
+		Environment.initializeIfEmpty().assignErrorJournal(new Consumer<Throwable>(){
+			@Override
+			public void accept(final Throwable t) {
+				System.err.println("Untrapped exception");
+				t.printStackTrace(System.err);
+			}
+		});		
+		RQ r = new RQ();
+		try {
+			Thread.currentThread().join();
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
 	}
 
 }

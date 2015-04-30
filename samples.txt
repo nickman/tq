@@ -1,0 +1,381 @@
+========================
+
+package com.jernejerin;
+
+import reactor.Environment;
+import reactor.core.Dispatcher;
+import reactor.core.dispatch.ThreadPoolExecutorDispatcher;
+import reactor.rx.broadcast.Broadcaster;
+
+public class ReactorHelloWorld {
+    public static void main(String[] args) throws InterruptedException {
+        // If using Reactorâ€™s static Environment instance, it must be 
+        // initialized before calling Environment.get(). You could also do 
+        // this in a static {} block.
+        Environment.initialize();
+
+        // A Broadcaster is a special kind of Stream that allows 
+        // publishing of values. A Broadcaster is a subclass of Stream which 
+        // exposes methods for publishing values into the pipeline. It is 
+        // possible to publish discreet values typed to the generic type of 
+        // the Stream as well as error conditions and the Reactive Streams 
+        // "complete" signal via the onComplete() method.
+        Broadcaster<String> sink = Broadcaster.create(Environment.get());
+
+        // Default is RingBufferDispatcher, which extends a SingleThreadDispatcher.
+        Dispatcher dispatcher1 = Environment.cachedDispatcher();
+
+        // in the environment we can access the same dispatcher as we have assigned through the environment to the sink
+        Environment environment = Environment.get();
+
+        // Dispatch downstream tasks onto a load-balanced Dispatcher.
+        // Re-route incoming values into a dynamically created Stream for each unique key evaluated by the {param keyMapper}.
+        sink.groupBy(d -> d.hashCode() % 5)
+            .consume(grouped -> grouped.dispatchOn(new ThreadPoolExecutorDispatcher(5, 5, "mythread"))
+                    // Transform input to upper-case and implicitly broadcast downstream.
+                    .map(String::toUpperCase)
+                    // Consume the transformed input and print to STDOUT.
+                    .consume(s -> System.out.printf("t=%s,s=%s%n", Thread.currentThread(), s)));
+
+        // Publish a value into the Stream
+        sink.onNext("On thread 1");
+        sink.onNext("On thread 2");
+        sink.onNext("On thread 3");
+        sink.onNext("On thread 4");
+        sink.onNext("On thread 5");
+
+        // Block the main thread until work on other threads is complete, 
+        // otherwise we wonâ€™t see any output.
+        Thread.sleep(1000);
+    }
+}
+
+I don't think what you're doing in the .dispatchOn call is what you intend. You need to use a Dispatcher whose lifecycle is managed. You can create them manually, but you should only do that if you really, really know you need to do that. Otherwise you should only get them from the Environment.
+
+Here's a variation that works like I would expect:
+
+Broadcaster<Buffer> sink = Broadcaster.create(Environment.get());
+
+int procs = Runtime.getRuntime().availableProcessors();
+sink.groupBy(s -> s.hashCode() % procs)
+    .consume(stream -> {
+      stream.dispatchOn(Environment.cachedDispatcher())
+            .consume(b -> LOG.info("{} from thread {}", b.readInt(), Thread.currentThread()));
+    });
+
+for (int i = 0; i < 10; i++) {
+  sink.onNext(new Buffer().append(i).flip());
+}
+sink.onComplete();
+
+Thread.sleep(500);
+
+
+========================
+Best practices for handling blocking IO requests?
+========================
+As I understand it, you get optimal performance from Reactor and Streams when you minimize blocking IO, but IO is always inevitable at some point. If you have a sequence of operations, and in the middle of them one requires data from another source, what is the best practice to handle that so you can optimize throughput? Specifically, lets say you have a stream like this:
+
+stream
+.map(o -> doSomething(o))
+.map(o -> mergeWithRemoteData(o))
+.map(o -> persistUpdatedObject(o))
+
+That is a bit of a contrived example, but should we be using something like the following?
+
+stream().partition(5).dispatchOn(environment.getDispatcher(Environment.THREAD_POOL))
+
+Is getCachedDispatcher() better? Or should we be benchmarking to decide?
+
+I'm going to put something like this in the projectreactor.io/docs section (I have a place for it, but haven't filled it out yet), but here's about the simplest fork/join worker pool I could come up with:
+
+    @Test
+    public void simpleForkJoinPool() throws InterruptedException {
+        List<String> ids = Arrays.asList("1", "2", "3", "4", "5", "6", "7", "8");
+
+        Streams.from(ids)
+               .dispatchOn(Environment.sharedDispatcher())
+               .partition()
+               .flatMap(stream -> stream.dispatchOn(cachedDispatcher())
+                                        .map(s -> findOne(s)))
+               .consume(t -> System.out.println(Thread.currentThread() + ", worker=" + t));
+
+        Thread.sleep(500);
+    }
+
+This takes the "ids" as input (though you could use a Broadcaster instead of an IterableStream), dispatches on the shared RingBuffer, partitions the work up on 1 Stream per CPU, puts the work on an assigned cachedDispatcher (a RingBuffer from a pool in the Environment), and then dispatches all results of the "findOne(s)" calls (in this case a helper method that returns Thread.currentThread().toString()) back onto the shared RingBuffer.
+
+Or to shorten the explanation: fork to worker threads and join back to a shared thread the results of the tasks.
+
+In general Streams need an ordered Dispatcher to perform their work. The ThreadPoolExecutorDispatcher is inherently unordered so is extremely limited in its application as far as a Stream is concerned. It's getting to the point now that there's almost no reason to still keep it around and it would be less confusing to just delete it entirely. We may do that in a future version. At the least I think we'll put @Deprecated on it.
+
+There is a subtle difference between your and my examples. You're correct in intuiting that the .dispatchOn(sharedDispatcher()) will cause the outermost Stream to act as a "join", which will cause results from worker threads to all be funneled onto the same, shared RingBuffer thread. If you leave that topmost .dispatchOn() off, you'll see that the results are all funneled to the Dispatcher which happens to be the last one to process a task that receives the onComplete. Comment it out and run it and you'll see what I mean.
+
+You need to call .dispatchOn() on the streams you receive in the .flatMap() call because you'll get N streams there, 1 per CPU by default. That's the only way to assign separate dispatchers to all the different Streams. By assigning the shared RingBuffer as the topmost Dispatcher, you get all events from worker threads funneled into the same, specific thread, rather than all funneling onto whatever random thread happens to run the last task.
+
+If you don't want to use the default cachedDispatcher() pool (since there's only 1 per CPU of them by default), then you can call Environment.newCachedDispatchers(poolSize, name) and create a whole bunch of them (100, 200, whatever suits your use case). These will be accessible through the Environment later (you get a DispatcherSupplier back from that call but you don't have to keep a reference to it...just call cachedDispatchers(name) later). Then replace the Environment.cachedDispatcher() call with dispatcherSupplier.get().
+
+Your example makes a lot of sense. Is there a difference between dispatchOn().partition() and .partition().dispatchOn()?
+
+My code currently has this:
+
+Streams.broadcast()
+     .partition(5)
+     .dispatchOn(environment.getCachedDispatcher())
+     .flatMap(stream -> stream.map());
+
+So, as this is written, am I right in understanding that these partitioned streams would actually be executing on the same (single) cachedDispatcher, instead of on parallel ones?
+
+In your example, this:
+
+        Streams.from(ids)
+               .dispatchOn(Environment.sharedDispatcher())
+
+causes the 'outer' stream to execute asynchronously correct? 
+
+If you removed the dispatchOn(), the 'outer' stream would run synchronously with the main thread, but still fork its 'workers' within the flatMap, right? 
+
+Thanks, I'm just trying to make sure I've got it all understood correctly.
+
+BTW: Why prefer cachedDispatcher() over the THREAD_POOL dispatcher?
+
+Hum. I think I get it... Just one last question to clarify, I tried removing the outer dispatchOn(), and saw that consume() ran on dispatcherGroup threads. When you use the outer dispatchOn(), it runs consistently on the shared thread on a consistent thread.
+
+Since in either case the Stream is running asynchronously from the calling thread, is there any reason to have the 'join'? All of the data will end up getting processed eventually, and even with the dispatchOn() call, the order is not guaranteed. So it seems to me there really isn't much benefit to getting the outer stream to finish processing on a consistent thread.
+
+It may or may not be important that the downstream of a fork runs on one of the worker threads. A thread is a thread is a thread, so in that respect, it doesn't make a difference.
+
+
+========================
+Stream as Work Queue
+========================
+There are 3 ways of doing work queue dispatching in reactor:
+
+X, Y are different resources producing data upstream 
+reactor-core: workQueueDispatcher -> stateless single consumer
+     X ---> Y ----> WorkQueueDispatcher -[1..N]--> Consumer 1
+                                                                           ...
+                                                               -[1..N]--> Consumer N
+
+You need a WorkQueueDispatcher and then dispatch data on it, not very composable (and will probably be deprecated at some point).
+
+
+reactor-stream: groupBy -> dynamic routing (messageQueue etc), to combine with N dispatchOn to scale-up
+   X --> Stream1 --> GroupBy --> Streams Subscriber
+                      [Queue] --> GroupedStream 1 --> dispatchOn --> Subscriber 1
+                                       ....
+                      [Queue] --> GroupedStream N --> dispatchOn --> Subscriber N
+                                            
+Very composable, use for instance:
+ stream
+   .groupBy( d -> d.hashCode() % numberPartition)
+  .consume( grouped -> grouped
+              .dispatchOn(somePooledDispatcher)
+               .consume(...)
+  )
+
+reactor-core: workProcessor -> optimized work queue on steroids with the standard RS protocol, a given subscriber will be assigned a thread. -> shared data pipeline or stateful consumers
+  X --> Y --> WorkProcessor --> Subscriber 1
+                                            ...
+                                            --> Subscriber N
+
+
+processor = RingBufferWorkProcessor.create()
+for(int i ; i < 4; i++) // 4 threads
+  processor.subscribe(subscriber)
+//send data
+processor.onNext(xxx)
+
+It's possible to combine the processor with Stream API: 
+stream = Streams.wrap(processor).map(...).filter(...)
+for(int i ; i < 4; i++) // 4 threads
+  s.consume()
+
+---
+
+package com.jernejerin;
+
+import reactor.Environment;
+import reactor.core.Dispatcher;
+import reactor.core.dispatch.ThreadPoolExecutorDispatcher;
+import reactor.rx.broadcast.Broadcaster;
+
+public class ReactorHelloWorld {
+    public static void main(String[] args) throws InterruptedException {
+        // If using Reactorâ€™s static Environment instance, it must be 
+        // initialized before calling Environment.get(). You could also do 
+        // this in a static {} block.
+        Environment.initialize();
+
+        // A Broadcaster is a special kind of Stream that allows 
+        // publishing of values. A Broadcaster is a subclass of Stream which 
+        // exposes methods for publishing values into the pipeline. It is 
+        // possible to publish discreet values typed to the generic type of 
+        // the Stream as well as error conditions and the Reactive Streams 
+        // "complete" signal via the onComplete() method.
+        Broadcaster<String> sink = Broadcaster.create(Environment.get());
+
+        // Default is RingBufferDispatcher, which extends a SingleThreadDispatcher.
+        Dispatcher dispatcher1 = Environment.cachedDispatcher();
+
+        // in the environment we can access the same dispatcher as we have assigned through the environment to the sink
+        Environment environment = Environment.get();
+
+        // Dispatch downstream tasks onto a load-balanced Dispatcher.
+        // Re-route incoming values into a dynamically created Stream for each unique key evaluated by the {param keyMapper}.
+        sink.groupBy(d -> d.hashCode() % 5)
+            .consume(grouped -> grouped.dispatchOn(new ThreadPoolExecutorDispatcher(5, 5, "mythread"))
+                    // Transform input to upper-case and implicitly broadcast downstream.
+                    .map(String::toUpperCase)
+                    // Consume the transformed input and print to STDOUT.
+                    .consume(s -> System.out.printf("t=%s,s=%s%n", Thread.currentThread(), s)));
+
+        // Publish a value into the Stream
+        sink.onNext("On thread 1");
+        sink.onNext("On thread 2");
+        sink.onNext("On thread 3");
+        sink.onNext("On thread 4");
+        sink.onNext("On thread 5");
+
+        // Block the main thread until work on other threads is complete, 
+        // otherwise we wonâ€™t see any output.
+        Thread.sleep(1000);
+    }
+}
+
+----
+
+I don't think what you're doing in the .dispatchOn call is what you intend. You need to use a Dispatcher whose lifecycle is managed. You can create them manually, but you should only do that if you really, really know you need to do that. Otherwise you should only get them from the Environment.
+
+Here's a variation that works like I would expect:
+
+Broadcaster<Buffer> sink = Broadcaster.create(Environment.get());
+
+int procs = Runtime.getRuntime().availableProcessors();
+sink.groupBy(s -> s.hashCode() % procs)
+    .consume(stream -> {
+      stream.dispatchOn(Environment.cachedDispatcher())
+            .consume(b -> LOG.info("{} from thread {}", b.readInt(), Thread.currentThread()));
+    });
+
+for (int i = 0; i < 10; i++) {
+  sink.onNext(new Buffer().append(i).flip());
+}
+sink.onComplete();
+
+Thread.sleep(500);
+
+----
+
+package com.jernejerin.reactor.samples;
+
+import reactor.Environment;
+import reactor.core.DispatcherSupplier;
+import reactor.rx.Streams;
+
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Created by Jernej Jerin on 7.4.2015.
+ */
+public class SimpleForkJoinPool2 {
+    public static void main(String[] args) throws InterruptedException {
+        Environment.initialize();
+        List<String> ids = Arrays.asList("1", "2", "3", "4", "5", "6", "7", "8", "9", "10");
+
+        DispatcherSupplier supplier1 = Environment.newCachedDispatchers(2, "pool1");
+        DispatcherSupplier supplier2 = Environment.newCachedDispatchers(5, "pool2");
+
+        Streams.from(ids)
+                .dispatchOn(Environment.sharedDispatcher())
+                .partition(2)
+                // here we receive multiple streams
+                .flatMap(stream -> stream
+                                // we need to call dispatch on each stream
+                                .dispatchOn(supplier1.get())
+                                .map(s -> s + " " + Thread.currentThread().toString())
+                )
+                .map(t -> {
+                    System.out.println(Thread.currentThread() + ", worker=" + t);
+                    return t;
+                })
+                // Also tried to do another dispatch but with no success.
+//                .dispatchOn(Environment.sharedDispatcher())
+                .partition(5)
+                // here we receive multiple streams
+                .flatMap(stream -> stream
+                                // we need to call dispatch on each stream
+                                .dispatchOn(supplier2.get())
+                                .map(s -> s + " " + Thread.currentThread().toString())
+                )
+                // worker threads should be funneled into the same, specific thread
+                // https://groups.google.com/forum/#!msg/reactor-framework/JO0hGftOaZs/20IhESjPQI0J
+                .consume(t -> System.out.println(Thread.currentThread() + ", worker=" + t));
+
+        Thread.sleep(500);
+    }
+}
+
+----
+
+SMALDINI
+
+package com.jernejerin.reactor.samples;
+
+import reactor.Environment;
+import reactor.core.DispatcherSupplier;
+import reactor.rx.Streams;
+
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Created by Jernej Jerin on 7.4.2015.
+ */
+public class SimpleForkJoinPool2 {
+    public static void main(String[] args) throws InterruptedException {
+        Environment.initialize();
+        List<String> ids = Arrays.asList("1", "2", "3", "4", "5", "6", "7", "8", "9", "10");
+
+        DispatcherSupplier supplier1 = Environment.newCachedDispatchers(2, "pool1");
+        DispatcherSupplier supplier2 = Environment.newCachedDispatchers(5, "pool2");
+
+        Streams.from(ids)
+                .dispatchOn(Environment.sharedDispatcher())
+                .partition(2)
+                // here we receive multiple streams
+                .flatMap(stream -> stream
+                                // we need to call dispatch on each stream
+                                .dispatchOn(supplier1.get())
+                                .map(s -> s + " " + Thread.currentThread().toString())
+                )
+                .map(t -> {
+                    System.out.println(Thread.currentThread() + ", worker=" + t);
+                    return t;
+                })
+                // Also tried to do another dispatch but with no success.
+//                .dispatchOn(Environment.sharedDispatcher())
+                .partition(5)
+                // here we receive multiple streams
+                .flatMap(stream -> stream
+                                // we need to call dispatch on each stream
+                                .dispatchOn(supplier2.get())
+                                .map(s -> s + " " + Thread.currentThread().toString())
+                )
+                .dispatchOn(Environment.sharedDispatcher())
+                // worker threads should be funneled into the same, specific thread
+                // https://groups.google.com/forum/#!msg/reactor-framework/JO0hGftOaZs/20IhESjPQI0J
+                .consume(t -> System.out.println(Thread.currentThread() + ", worker=" + t));
+
+        Thread.sleep(500);
+    }
+}
+
+----
+
+  
+
+
+
+========================
