@@ -39,6 +39,16 @@ create or replace PACKAGE BODY TQV AS
     END IF;
   END CS;
   
+  FUNCTION CS(arr IN rowidtab) RETURN INT IS
+  BEGIN
+    IF arr IS NOT NULL THEN
+      RETURN arr.COUNT;
+    ELSE
+      RETURN 0;
+    END IF;
+  END CS;
+  
+
   FUNCTION BATCHTXIDS(tqbatch IN TQBATCH) RETURN XROWIDS IS
     rids XROWIDS := new XROWIDS();
   BEGIN
@@ -63,7 +73,7 @@ create or replace PACKAGE BODY TQV AS
       return tqbatch.ROWIDS;
     END IF;
   END BATCHXIDS;
-  
+
 
 
   -- *******************************************************
@@ -123,7 +133,7 @@ create or replace PACKAGE BODY TQV AS
   -- *******************************************************
   --    Sorts the TQSTUBs in a batch by TQ ID
   -- *******************************************************
-  PROCEDURE SORTTRADEARR(tqb IN OUT TQBATCH, tqStubs IN TQSTUB_ARR) IS
+  PROCEDURE SORTTRADEARR(tqb IN OUT NOCOPY TQBATCH, tqStubs IN TQSTUB_ARR) IS
     fTx INT := 0;
     lTx INT := 0;
     sortedStubs TQSTUB_ARR;
@@ -177,7 +187,8 @@ create or replace PACKAGE BODY TQV AS
     currentPosAcctId INT := -1;
     currentTradeArr TQSTUB_ARR := NULL;
     tcount INT := 0;
-    T TQSTUB;
+    T TQSTUB;    
+    r rowidtab;
   BEGIN
     IF STUBS.COUNT = 0 THEN
       RETURN;
@@ -189,7 +200,7 @@ create or replace PACKAGE BODY TQV AS
         currentPosAcctId := T.ACCOUNT_ID;
       END IF;
       IF (T.ACCOUNT_ID != currentPosAcctId OR tcount = MAX_BATCH_SIZE OR T.SECURITY_TYPE='X') THEN
-        IF T.SECURITY_TYPE='P' THEN
+        IF T.SECURITY_TYPE='X' THEN
           -- If we already batched some trades, flush them and reset state
           IF tcount > 0 THEN
             PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
@@ -199,7 +210,8 @@ create or replace PACKAGE BODY TQV AS
             currentTradeArr := new TQSTUB_ARR();
             currentPosAcctId := T.ACCOUNT_ID;
           END IF;
-          -- Now flush the single P trade
+          -- Now flush the single X trade
+          --SELECT ROWID BULK COLLECT INTO r FROM TQSTUBS WHERE ROWID = CHARTOROWID(T.XROWID) FOR UPDATE SKIP LOCKED;
           PIPE ROW (new TQBATCH(ACCOUNT => currentPosAcctId, TCOUNT => 1, FIRST_T => T.TQUEUE_ID, LAST_T => T.TQUEUE_ID, BATCH_ID => NEXTBATCHID, ROWIDS => new XROWIDS(T.XROWID), STUBS => new TQSTUB_ARR(T)));
           tcount := 0;
           currentTradeArr := new TQSTUB_ARR();
@@ -207,6 +219,7 @@ create or replace PACKAGE BODY TQV AS
           CONTINUE;
         ELSE
           IF tcount > 0  THEN
+            --SELECT ROWID BULK COLLECT INTO r FROM TQSTUBS WHERE ROWID = CHARTOROWID(T.XROWID) FOR UPDATE SKIP LOCKED;
             PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
             tcount := 0;
             currentTradeArr := new TQSTUB_ARR();
@@ -229,6 +242,7 @@ create or replace PACKAGE BODY TQV AS
     );
     END LOOP;
     IF tcount > 0 THEN
+        --SELECT ROWID BULK COLLECT INTO r FROM TQSTUBS WHERE ROWID = CHARTOROWID(T.XROWID) FOR UPDATE SKIP LOCKED;
         PIPE ROW (PREPBATCH(currentPosAcctId, currentTradeArr));
     END IF;
   END TRADEBATCH;
@@ -264,7 +278,7 @@ create or replace PACKAGE BODY TQV AS
   --    call LOCKBATCH(batch) or LOCKBATCHES(batch_arr)
   -- *******************************************************
 
-  FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10, WAIT_TIME IN INT DEFAULT 0) RETURN TQBATCH_ARR PIPELINED IS
+  FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10, WAIT_TIME IN INT DEFAULT 0) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE IS
       batchy TQBATCH;
       latency NUMBER  := 0;
       pipedRows PLS_INTEGER := 0;
@@ -274,12 +288,12 @@ create or replace PACKAGE BODY TQV AS
           TQV.TRADEBATCH(
             TQV.TOTQSTUB(CURSOR(SELECT * FROM TABLE(
             TQV.FINDSTUBS(
-              CURSOR (
+              CURSOR (                
                 SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
                 WHERE TQUEUE_ID > STARTING_ID
                 AND BATCH_ID < 1
                 AND BATCH_TS IS NULL
-                ORDER BY TQUEUE_ID, ACCOUNT_ID
+                ORDER BY TQUEUE_ID, ACCOUNT_ID                
               )
             , MAX_ROWS) -- MAX ROWS (Optional)
             ) ORDER BY ACCOUNT_ID))
@@ -384,8 +398,8 @@ create or replace PACKAGE BODY TQV AS
       COMMIT;
       RETURN FALSE;
   END LOCKSTUB;
-  
-  PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR, tqbatch IN OUT TQBATCH) IS  -- , droppedStubs IN TQSTUB_ARR
+
+  PROCEDURE UPDATE_STUBS(lockedStubs IN TQSTUB_ARR, tqbatch IN OUT NOCOPY TQBATCH) IS  -- , droppedStubs IN TQSTUB_ARR
     rids XROWIDS := new XROWIDS();
   BEGIN
     --SELF.DSTUBS := droppedStubs;
@@ -412,7 +426,7 @@ create or replace PACKAGE BODY TQV AS
   --    Lock all rows in a batch
   -- *******************************************************
 
-  PROCEDURE LOCKBATCH(batch IN OUT TQBATCH, commitTX IN INT) IS
+  PROCEDURE LOCKBATCH(batch IN OUT NOCOPY TQBATCH, commitTX IN INT) IS
     lockedStubs TQSTUB_ARR;
     now TIMESTAMP := SYSTIMESTAMP;
 
@@ -439,19 +453,19 @@ create or replace PACKAGE BODY TQV AS
     UPDATE_STUBS(lockedStubs, batch);
   END LOCKBATCH;
 
-  PROCEDURE LOCKBATCH(batch IN OUT TQBATCH) IS
+  PROCEDURE LOCKBATCH(batch IN OUT NOCOPY TQBATCH) IS
   BEGIN
     LOCKBATCH(batch, 1);
   END LOCKBATCH;
-  
+
     --======================================================================================================
     --======================================================================================================
-    
-  FUNCTION LOCKBATCHREF(batch IN OUT TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2 IS
+
+  FUNCTION LOCKBATCHREF(batch IN OUT NOCOPY TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2 IS
     srowid VARCHAR2(200);
     lockedStubs TQSTUB_ARR;
     now TIMESTAMP := SYSTIMESTAMP;
-    
+
   BEGIN
     SELECT TQSTUB(
         ROWIDTOCHAR(ROWID),
@@ -469,14 +483,19 @@ create or replace PACKAGE BODY TQV AS
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
     ) FOR UPDATE OF BATCH_ID, BATCH_TS SKIP LOCKED;
 
-    
+
     UPDATE_STUBS(lockedStubs, batch);
-  
-      INSERT INTO TQBATCHES VALUES(batch) RETURNING ROWIDTOCHAR(ROWID) INTO srowid;
-      COMMIT;
+    IF(CS(lockedStubs) > 0 ) THEN
+      INSERT INTO TQBATCHES VALUES(batch) RETURNING ROWIDTOCHAR(ROWID) INTO srowid;      
       accountId := batch.ACCOUNT;
       tcount := batch.STUBS.COUNT;
-      RETURN srowid;
+      RETURN srowid;    
+    ELSE
+      accountId := -1;
+      tcount := 0;
+      RETURN null;          
+    END IF;
+
   END LOCKBATCHREF;
 
   --======================================================================================================
@@ -501,7 +520,7 @@ create or replace PACKAGE BODY TQV AS
   --    Intended to re-lock a batch when trade processing starts
   -- *******************************************************
 
-  PROCEDURE RELOCKBATCH(batch IN OUT TQBATCH) IS
+  PROCEDURE RELOCKBATCH(batch IN OUT NOCOPY TQBATCH) IS
     lockedStubs TQSTUB_ARR;
     now TIMESTAMP := SYSTIMESTAMP;
   BEGIN
@@ -531,7 +550,7 @@ create or replace PACKAGE BODY TQV AS
   --    Locks, selects and returns all the trades for a batch
   -- *******************************************************
 
-  FUNCTION STARTBATCH(tqbatch IN OUT TQBATCH) RETURN TQTRADE_ARR AS
+  FUNCTION STARTBATCH(tqbatch IN OUT NOCOPY TQBATCH) RETURN TQTRADE_ARR AS
     trades TQTRADE_ARR;
     lockedTrades TQTRADE_ARR;
     droppedTrades TQTRADE_ARR;
@@ -820,7 +839,7 @@ create or replace PACKAGE BODY TQV AS
   --    Handles and delegates any CQ notifications
   -- *******************************************************
 
-  FUNCTION HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR) RETURN NUMBER AS
+  FUNCTION HANDLE_CHANGE(n IN OUT NOCOPY CQ_NOTIFICATION$_DESCRIPTOR) RETURN NUMBER AS
     --TYPE CHANGE_TABLE_ARR IS TABLE OF CQ_NOTIFICATION$_TABLE INDEX BY PLS_INTEGER;
 
     rowids ROWID_ARR := NEW ROWID_ARR();

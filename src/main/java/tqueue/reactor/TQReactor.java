@@ -49,7 +49,7 @@ import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Logger;
 
 import reactor.Environment;
-import reactor.core.config.DispatcherType;
+import reactor.core.Dispatcher;
 import reactor.core.dispatch.wait.ParkWaitStrategy;
 import reactor.core.processor.RingBufferWorkProcessor;
 import reactor.fn.Consumer;
@@ -57,7 +57,6 @@ import reactor.fn.Function;
 import reactor.rx.Streams;
 import reactor.rx.action.Action;
 import reactor.rx.action.Control;
-import reactor.rx.action.terminal.ConsumerAction;
 import reactor.rx.broadcast.Broadcaster;
 import reactor.rx.stream.GroupedStream;
 import tqueue.db.types.DBType;
@@ -153,12 +152,12 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	/** The poller's maximum batch size */
 	private int maxBatchSize = 1000;
 	/** The poller's wait period in seconds when waiting for the next rows to become available */
-	private int pollWaitTime = 1;
+	private int pollWaitTime = 3;
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
 	private int pollWaitLoops = 10;
 	/** The number of parallel streams to run per core */
 	private int streamsPerCore = 1;
-	protected final AtomicLong gBatchCounter = new AtomicLong(0);
+	
 	
 	Control ctx = null;
 	
@@ -177,6 +176,8 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	/** The ring buffer */
 	protected RingBufferWorkProcessor<BatchRoutingKey> ringBuffer = null;
 	
+	protected final AtomicInteger pollerBarrier = new AtomicInteger(0);
+	
 	
 	
 	
@@ -184,8 +185,6 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	private final AtomicInteger threadSerial = new AtomicInteger(0);
 	/** The starting TQUEUE_ID to poll for */
 	private final AtomicInteger startId = new AtomicInteger(0);
-	/** The numnber of pending tasks in the current loop */
-	private final AtomicInteger pending = new AtomicInteger(0);
 	
 	/** The metric registry */
 	private final MetricRegistry registry;
@@ -198,16 +197,17 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	private final Meter batchesPerSec;
 	/** A histogram of batch sizes (trades per batch) */
 	private final Histogram avgBatchSize;
-	/** A histogram of serialized TQBATCH sizes */
-	private final Histogram avgTQBatchByteSize;
-	/** A histogram of TQBATCH ser/deser times in ms. */
-	private final Histogram avgSerDeserTime;
 	/** A histogram of batch processing times */
 	private final Histogram avgBatchProcessingTime;
 	/** A histogram of trade processing times */
 	private final Histogram avgTradeProcessingTime;
 	/** A histogram of event publishing back-pressure */
 	private final Histogram avgBackPressureTime;
+	/** A histogram of ring buffer available capacity */
+	private final Histogram avgRingBufferCap;
+	
+	/** A histogram of concurrent inflight batches */
+	private final Histogram inFlightMetric;
 	
 
 	/** The started flag */
@@ -259,8 +259,10 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 		//inFlight = connPool.getInflightGauge();
 		final Gauge<Integer> inFlightGauge = new Gauge<Integer>() {
 			@Override
-			public Integer getValue() {				
-				return inFlight.get();
+			public Integer getValue() {			
+				final int i = inFlight.get();
+				inFlightMetric.update(i);
+				return i;
 			}
 		};
 		final Gauge<Integer> startIdGauge = new Gauge<Integer>() {
@@ -270,27 +272,16 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 			}
 		};
 		
-		registry.register("InFlightBatches", inFlightGauge);
+		registry.register("InFlightBatchGauge", inFlightGauge);
 		registry.register("StartingId", startIdGauge);
-//		/** A meter of trades per/s */
-//		private final Meter tradesPerSec;
-//		/** A meter of batches per/s */
-//		private final Meter batchesPerSec;
-//		/** A histogram of batch sizes (trades per batch) */
-//		private final Histogram avgBatchSize;
 		tradesPerSec = registry.meter("tradesPerSec");
 		batchesPerSec = registry.meter("batchesPerSec");
 		avgBatchSize = registry.histogram("avgBatchSize");
 		avgBatchProcessingTime = registry.histogram("avgBatchProcessingTime");
 		avgTradeProcessingTime = registry.histogram("avgTradeProcessingTime");
 		avgBackPressureTime = registry.histogram("avgBackPressureTime");
-//		/** A histogram of serialized TQBATCH sizes */
-//		private final Histogram avgTQBatchByteSize;
-//		/** A histogram of TQBATCH ser/deser times in ms. */
-//		private final Histogram avgSerDeserTime;
-		
-		avgTQBatchByteSize = registry.histogram("avgTQBatchByteSize");
-		avgSerDeserTime = registry.histogram("avgSerDeserTime");
+		inFlightMetric = registry.histogram("inFlightBatches");
+		avgRingBufferCap = registry.histogram("avgRingBufferCap");
 		
 		
 		
@@ -384,8 +375,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 		return new Consumer<BatchRoutingKey>() {
 			@Override
 			public void accept(final BatchRoutingKey batch) {					
-				try {
-					final long id = gBatchCounter.incrementAndGet();		
+				try {					
 //					if(key==3) {
 //						log.info("Consumed Batch(" + key + ")  [" + id + "]: stubs:" + batch.getTcount() + ", first:" + batch.getFirstT() + ", last:" + batch.getLastT());
 //					}
@@ -395,7 +385,6 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 					avgBatchSize.update(tcount);
 
 					processBatch(batch);
-					pending.decrementAndGet();
 					inFlight.decrementAndGet();
 				} catch (Exception ex) {
 					throw new RuntimeException(ex);
@@ -405,6 +394,9 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	}
 		
 
+	
+	
+	
 	
 	Consumer<GroupedStream<Integer, BatchRoutingKey>> batchConsumerGrouped() {
 		return new Consumer<GroupedStream<Integer, BatchRoutingKey>>() {		
@@ -417,53 +409,51 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 		};
 	}
 	
+    public static int findNextPositivePowerOfTwo(final int value) {
+       	return  1 << (32 - Integer.numberOfLeadingZeros((int)value - 1));    		
+	}    
+
 	
 	/**
 	 * Initializes the TQBatch broadcaster
 	 */
 	protected void initSink() {
 		final int totalStreams = CORES * streamsPerCore;
-		tpe = new ThreadPoolExecutor(12, 24, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
+		final int ringBufferSize = findNextPositivePowerOfTwo(totalStreams);
+		log.info("\n\t=====================================\n\tRingBuffer Slots:" + ringBufferSize + "\n\t=====================================");
+		tpe = new ThreadPoolExecutor(CORES * 4, CORES * 4, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
 		tpe.prestartAllCoreThreads();
-		ringBuffer = RingBufferWorkProcessor.create(tpe, totalStreams * 4, new ParkWaitStrategy());		
+		ringBuffer = RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());		
 		
-		final Map<Integer, Consumer<BatchRoutingKey>> groupConsumers = new HashMap<Integer, Consumer<BatchRoutingKey>>(totalStreams);
-		for(int i = 0; i < totalStreams; i++) {
-			final int k = i;
-//			groupConsumers.put(i, new Consumer<BatchRoutingKey>(){
-//				final Dispatcher dispatcher = Environment.cachedDispatcher();
-//				@Override
-//				public void accept(final BatchRoutingKey batch) {							
-//					dispatcher.dispatch(batch, batchConsumer(k), errorConsumer(k));					
-//				}
-//			});			
-			final ConsumerAction<BatchRoutingKey> action = new ConsumerAction<BatchRoutingKey>(
-				Environment.newDispatcher(1, 1, DispatcherType.MPSC),
-				batchConsumer(k), 
-				errorConsumer(k),
-				completionConsumer(k)
-			); 
-			groupConsumers.put(i, action);			
-		}
+	final Map<Integer, Consumer<BatchRoutingKey>> groupConsumers = new HashMap<Integer, Consumer<BatchRoutingKey>>(totalStreams);
+	for(int i = 0; i < totalStreams; i++) {
+		final int k = i;
+		groupConsumers.put(i, new Consumer<BatchRoutingKey>(){
+			final Dispatcher dispatcher = Environment.cachedDispatcher();
+			@Override
+			public void accept(final BatchRoutingKey batch) {							
+				dispatcher.dispatch(batch, batchConsumer(k), errorConsumer(k));					
+			}
+		});			
+	}
 		ctx = Streams.wrap(ringBuffer)
-			.observe(t -> {				
-				inFlight.incrementAndGet();
+//			.observe(t -> {				
+//				inFlight.incrementAndGet();
 //				try {
 //					log.info("Batch [" + t.getAccount() + " / " + t.getBatchId() + "] is in flight");
 //				} catch (Exception ex) {
 //					log.error("Infligh Observer Exception", ex);
 //					throw new RuntimeException(ex);
 //				}								
-			})
-			.observeComplete(x -> 
-				inFlight.decrementAndGet()
-			)
+//			})
+//			.observeComplete(x -> 
+//				inFlight.decrementAndGet()
+//			)
 			.groupBy(groupFunction(totalStreams))
-			.capacity(1)
 			.consume(new Consumer<GroupedStream<Integer, BatchRoutingKey>>() {
 				@Override
 				public void accept(final GroupedStream<Integer, BatchRoutingKey> t) {
-					t.consume(groupConsumers.get(t.key()));					
+					t.capacity(1).consume(groupConsumers.get(t.key()));					
 				}
 			});
 				
@@ -482,15 +472,28 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	public void run() {
 		
 		while(started.get()) {
-			try {
-				if(pending.get()!=0) {
-//					log.info("Waiting on pending");
-//					while(pending.get()!=0) {
-//						Thread.yield();
-//					}
-//					log.info("Pending complete");
+			if(pollerBarrier.get() > 0) {
+				log.info("Waiting on poller barrier...");
+				final long start = System.nanoTime(); 
+				while(pollerBarrier.get() > 0) {
+					Thread.yield();
 				}
+				final long elapsed = System.nanoTime()-start;
+				log.info("Waited on poller barrier for [" + elapsed + "] ns. / [" + TimeUnit.MILLISECONDS.convert(elapsed, TimeUnit.NANOSECONDS) + "] ms.");
+			}
+			try {
+				/*
+				 * ===========================================================================
+				 * SELECT TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,STUBS ) 
+				 * FROM TABLE(TQV.QUERYTBATCHES(?, ?, ?, ?)) 
+				 * ORDER BY FIRST_T 
+				 * FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, 
+				 * 		MAX_BATCH_SIZE IN INT DEFAULT 10, WAIT_TIME IN INT DEFAULT 0) RETURN TQBATCH_ARR
+				 * ===========================================================================
+				 */
+				
 				pollerPs.setInt(1, this.startId.get());
+//				pollerPs.setInt(1, 0);
 				pollerPs.setInt(2, maxRows);
 				pollerPs.setInt(3, maxBatchSize);
 				pollerPs.setInt(4, pollWaitTime);			
@@ -526,19 +529,21 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 					final String rowid = pollerCs.getString(1);
 					final int accountId = pollerCs.getInt(3);
 					final int tcount = pollerCs.getInt(4);
-					if(tcount==0) {
+					if(rowid==null) {
 						continue;
 					}
 					stubCount += tcount;
 					TQBATCH postBatch = (TQBATCH)pollerCs.getORAData(2, tqBatchOraDataFactory);
-					this.startId.set(postBatch.getLastT());
+					this.startId.set(postBatch.getFirstT());
 					batchCount++;
 					pollerConnection.commit();
-					pending.incrementAndGet();
+					avgRingBufferCap.update(ringBuffer.getAvailableCapacity());
 					final long start = System.currentTimeMillis();
-					ringBuffer.onNext(new BatchRoutingKey(rowid, accountId, tcount));
+					ringBuffer.onNext(new BatchRoutingKey(rowid, accountId, tcount));					
 					final long elapsed = System.currentTimeMillis() - start;
+					pollerBarrier.incrementAndGet();
 					avgBackPressureTime.update(elapsed);
+					inFlight.incrementAndGet();
 					
 					//sink.onNext(postBatch);
 				}
@@ -657,6 +662,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 			cs.setObject(1, preBatch, TQBATCH._SQL_TYPECODE);
 //			cs.setORAData(1, preBatch);
 			cs.execute();
+			pollerBarrier.decrementAndGet();
 			postBatch = (TQBATCH)cs.getORAData(1, tqBatchOraDataFactory);
 			cs.close();
 			if(postBatch.getTcount() != preBatch.getTcount()) {
