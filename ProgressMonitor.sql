@@ -6,6 +6,8 @@ select 'TRADES', count(*) from tqueue
 UNION ALL
 select 'STUBS', count(*) from tqstubs
 UNION ALL
+select 'BATCHREFS', count(*) from tqbatches
+UNION ALL
 select '---------> PENDING', count(*) from tqueue where status_code = 'PENDING'
 UNION ALL
 select '---------> CLEARED', count(*) from tqueue where status_code = 'CLEARED'
@@ -18,13 +20,16 @@ select 'LAST STUB', max(tqueue_id) from tqstubs
 UNION ALL
 select 'TPS', count(*)/15 from tqueue where status_code = 'CLEARED' and UPDATE_TS >= (SYSDATE - (1/24/60/4))
 
-select * from tqueue where status_code = 'PENDING' order by XID
+select * from tqstubs
 
-select security_type, count(*) from security where security_display_name in (
-	select distinct security_display_name from tqueue where status_code = 'PENDING'
-) group by security_type
+select * from event order by event_id desc
 
-select security_type, count(*) from security group by security_type
+SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
+WHERE TQUEUE_ID > 0
+AND BATCH_ID < 1 OR BATCH_ID IS NULL
+AND BATCH_TS IS NULL
+ORDER BY TQUEUE_ID, ACCOUNT_ID
 
 
-select XID, COUNT(*) from tqueue where status_code = 'PENDING' group by XID
+
+select * from TQBATCHES

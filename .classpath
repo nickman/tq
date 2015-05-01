@@ -1,77 +1,85 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <classpath>
+	<classpathentry including="**/*.java" kind="src" output="target/test-classes" path="src/test/java"/>
+	<classpathentry excluding="**/*.java" kind="src" output="target/test-classes" path="src/test/resources"/>
 	<classpathentry including="**/*.java" kind="src" path="src/main/java"/>
-	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/jdk1.8.0"/>
+	<classpathentry excluding="**/*.java" kind="src" path="src/main/resources"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/jdk1.8.0_31"/>
 	<classpathentry kind="var" path="M2_REPO/junit/junit/4.8.2/junit-4.8.2.jar" sourcepath="M2_REPO/junit/junit/4.8.2/junit-4.8.2-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/junit/junit/4.8.2/junit-4.8.2-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/junit/junit/4.8.2/junit-4.8.2-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
-	<classpathentry kind="var" path="M2_REPO/com/oracle/ojdbc6/11.2.0.2.0/ojdbc6-11.2.0.2.0.jar"/>
+	<classpathentry kind="var" path="M2_REPO/com/oracle/ojdbc6/11.2.0.2.0/ojdbc6-11.2.0.2.0.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/com/oracle/ojdbc6/11.2.0.2.0/ojdbc6-11.2.0.2.0-javadoc.jar!/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="var" path="M2_REPO/com/oracle/sqlj/11.2.0.2.0/sqlj-11.2.0.2.0.jar"/>
 	<classpathentry kind="var" path="M2_REPO/io/projectreactor/reactor-core/2.0.0.RELEASE/reactor-core-2.0.0.RELEASE.jar" sourcepath="M2_REPO/io/projectreactor/reactor-core/2.0.0.RELEASE/reactor-core-2.0.0.RELEASE-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/io/projectreactor/reactor-core/2.0.0.RELEASE/reactor-core-2.0.0.RELEASE-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/io/projectreactor/reactor-core/2.0.0.RELEASE/reactor-core-2.0.0.RELEASE-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/com/lmax/disruptor/3.3.2/disruptor-3.3.2.jar" sourcepath="M2_REPO/com/lmax/disruptor/3.3.2/disruptor-3.3.2-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/com/lmax/disruptor/3.3.2/disruptor-3.3.2-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/com/lmax/disruptor/3.3.2/disruptor-3.3.2-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/org/reactivestreams/reactive-streams/1.0.0.RC3/reactive-streams-1.0.0.RC3.jar" sourcepath="M2_REPO/org/reactivestreams/reactive-streams/1.0.0.RC3/reactive-streams-1.0.0.RC3-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/org/reactivestreams/reactive-streams/1.0.0.RC3/reactive-streams-1.0.0.RC3-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/org/reactivestreams/reactive-streams/1.0.0.RC3/reactive-streams-1.0.0.RC3-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/org/slf4j/slf4j-api/1.7.10/slf4j-api-1.7.10.jar" sourcepath="M2_REPO/org/slf4j/slf4j-api/1.7.10/slf4j-api-1.7.10-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/org/slf4j/slf4j-api/1.7.10/slf4j-api-1.7.10-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/org/slf4j/slf4j-api/1.7.10/slf4j-api-1.7.10-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/io/projectreactor/reactor-stream/2.0.0.RELEASE/reactor-stream-2.0.0.RELEASE.jar" sourcepath="M2_REPO/io/projectreactor/reactor-stream/2.0.0.RELEASE/reactor-stream-2.0.0.RELEASE-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/io/projectreactor/reactor-stream/2.0.0.RELEASE/reactor-stream-2.0.0.RELEASE-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/io/projectreactor/reactor-stream/2.0.0.RELEASE/reactor-stream-2.0.0.RELEASE-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/log4j/log4j/1.2.16/log4j-1.2.16.jar" sourcepath="M2_REPO/log4j/log4j/1.2.16/log4j-1.2.16-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/log4j/log4j/1.2.16/log4j-1.2.16-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/log4j/log4j/1.2.16/log4j-1.2.16-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
-	<classpathentry kind="var" path="M2_REPO/org/slf4j/slf4j-log4j12/1.7.7/slf4j-log4j12-1.7.7.jar" sourcepath="M2_REPO/org/slf4j/slf4j-log4j12/1.7.7/slf4j-log4j12-1.7.7-sources.jar">
-		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/org/slf4j/slf4j-log4j12/1.7.7/slf4j-log4j12-1.7.7-javadoc.jar!/"/>
-		</attributes>
-	</classpathentry>
+	<classpathentry kind="var" path="M2_REPO/org/slf4j/slf4j-log4j12/1.7.7/slf4j-log4j12-1.7.7.jar"/>
 	<classpathentry kind="var" path="M2_REPO/com/zaxxer/HikariCP-java6/2.3.6/HikariCP-java6-2.3.6.jar" sourcepath="M2_REPO/com/zaxxer/HikariCP-java6/2.3.6/HikariCP-java6-2.3.6-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/com/zaxxer/HikariCP-java6/2.3.6/HikariCP-java6-2.3.6-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/com/zaxxer/HikariCP-java6/2.3.6/HikariCP-java6-2.3.6-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/org/javassist/javassist/3.19.0-GA/javassist-3.19.0-GA.jar" sourcepath="M2_REPO/org/javassist/javassist/3.19.0-GA/javassist-3.19.0-GA-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/org/javassist/javassist/3.19.0-GA/javassist-3.19.0-GA-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/org/javassist/javassist/3.19.0-GA/javassist-3.19.0-GA-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/org/codehaus/groovy/groovy-all/2.3.6/groovy-all-2.3.6.jar" sourcepath="M2_REPO/org/codehaus/groovy/groovy-all/2.3.6/groovy-all-2.3.6-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/org/codehaus/groovy/groovy-all/2.3.6/groovy-all-2.3.6-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/org/codehaus/groovy/groovy-all/2.3.6/groovy-all-2.3.6-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
-	<classpathentry kind="src" path="/jmx-optional"/>
+	<classpathentry kind="var" path="M2_REPO/com/sun/jdmk/jmx-optional/1.0-b02-SNAPSHOT/jmx-optional-1.0-b02-SNAPSHOT.jar" sourcepath="M2_REPO/com/sun/jdmk/jmx-optional/1.0-b02-SNAPSHOT/jmx-optional-1.0-b02-SNAPSHOT-sources.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/com/sun/jdmk/jmx-optional/1.0-b02-SNAPSHOT/jmx-optional-1.0-b02-SNAPSHOT-javadoc.jar!/"/>
+		</attributes>
+	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/com/google/guava/guava/18.0/guava-18.0.jar" sourcepath="M2_REPO/com/google/guava/guava/18.0/guava-18.0-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/com/google/guava/guava/18.0/guava-18.0-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/com/google/guava/guava/18.0/guava-18.0-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/com/github/stephenc/high-scale-lib/high-scale-lib/1.1.4/high-scale-lib-1.1.4.jar" sourcepath="M2_REPO/com/github/stephenc/high-scale-lib/high-scale-lib/1.1.4/high-scale-lib-1.1.4-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/com/github/stephenc/high-scale-lib/high-scale-lib/1.1.4/high-scale-lib-1.1.4-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/com/github/stephenc/high-scale-lib/high-scale-lib/1.1.4/high-scale-lib-1.1.4-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="var" path="M2_REPO/io/dropwizard/metrics/metrics-core/4.0.0-SNAPSHOT/metrics-core-4.0.0-SNAPSHOT.jar" sourcepath="M2_REPO/io/dropwizard/metrics/metrics-core/4.0.0-SNAPSHOT/metrics-core-4.0.0-SNAPSHOT-sources.jar">
 		<attributes>
-			<attribute name="javadoc_location" value="jar:file:/C:/Users/nwhitehe/.m2/repository/io/dropwizard/metrics/metrics-core/4.0.0-SNAPSHOT/metrics-core-4.0.0-SNAPSHOT-javadoc.jar!/"/>
+			<attribute name="javadoc_location" value="jar:file:/home/nwhitehead/.m2/repository/io/dropwizard/metrics/metrics-core/4.0.0-SNAPSHOT/metrics-core-4.0.0-SNAPSHOT-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
 	<classpathentry kind="output" path="target/classes"/>

@@ -1,9 +1,18 @@
 Declare
   idx NUMBER := 0;
+  sname VARCHAR2(100);
+  csize NUMBER;
+  cursor c is select sequence_name, cache_size from user_sequences where SEQUENCE_NAME NOT LIKE '%ACCOUNT%' AND SEQUENCE_NAME NOT LIKE '%SECURITY%';
 Begin  
   Execute Immediate 'truncate table event';
-  --Execute Immediate 'truncate table tqueue';
-  --Execute Immediate 'truncate table tqstubs';
+  Execute Immediate 'truncate table tqueue';
+  Execute Immediate 'truncate table tqstubs';
+/*
+  for seqInfo in c LOOP
+    EXECUTE IMMEDIATE 'DROP SEQUENCE TQREACTOR.' || c.SEQUENCE_NAME;
+    EXECUTE IMMEDIATE 'CREATE SEQUENCE ' || c.SEQUENCE_NAME || ' MINVALUE 0 MAXVALUE 2147483647 INCREMENT BY 1 START WITH 1 CACHE ' || c.cache_size || ' ORDER  NOCYCLE';
+  END LOOP;
+*/  
   SELECT COUNT(*) INTO IDX FROM ACCOUNT;
   IF IDX < 1000 THEN
     TESTDATA.GENACCTS(1000-IDX);
@@ -18,14 +27,48 @@ Begin
   END IF;
   COMMIT;  
   DBMS_OUTPUT.PUT_LINE(TESTDATA.FORCELOADCACHE);
-  FOR i in 1..200 LOOP
-    Testdata.Gentrades(10000);
-    --DBMS_OUTPUT.PUT_LINE('Loop ' || i);
-    DBMS_LOCK.SLEEP(1);
+  FOR i in 1..1 LOOP
+    Testdata.Gentrades(100);
+    --DBMS_OUTPUT.PUT_LINE('Loop ' || i);    
     Commit;
+    --DBMS_LOCK.SLEEP(1);
   END LOOP;
   DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'TQUEUE', estimate_percent => 100);  
 End;
+
+
+
+
+select 'ACCOUNTS', count(*) from account
+UNION ALL
+select 'SECURITIES', count(*) from security
+UNION ALL
+select 'TRADES', count(*) from tqueue
+UNION ALL
+select 'STUBS', count(*) from tqstubs
+UNION ALL
+select '---------> PENDING', count(*) from tqueue where status_code = 'PENDING'
+UNION ALL
+select '---------> CLEARED', count(*) from tqueue where status_code = 'CLEARED'
+UNION ALL
+select 'LAST TQ', max(tqueue_id) from tqueue where status_code = 'CLEARED'
+UNION ALL
+select 'NEXT STUB', min(tqueue_id) from tqstubs
+UNION ALL
+select 'LAST STUB', max(tqueue_id) from tqstubs
+UNION ALL
+select 'TPS', count(*)/15 from tqueue where status_code = 'CLEARED' and UPDATE_TS >= (SYSDATE - (1/24/60/4))
+
+select * from tqstubs
+
+select * from event order by event_id desc
+
+SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
+WHERE TQUEUE_ID > 0
+AND BATCH_ID < 1 OR BATCH_ID IS NULL
+AND BATCH_TS IS NULL
+ORDER BY TQUEUE_ID, ACCOUNT_ID
+
 
 
 
@@ -68,11 +111,11 @@ select * from tqueue where status_code = 'PENDING' ORDER BY TQUEUE_ID, ACCOUNT_D
 
 select * from tqstubs
 
-                SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
-                WHERE TQUEUE_ID > 0
-                AND BATCH_ID < 1 OR BATCH_ID IS NULL
-                AND BATCH_TS IS NULL
-                ORDER BY TQUEUE_ID, ACCOUNT_ID
+SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
+WHERE TQUEUE_ID > 0
+AND BATCH_ID < 1 OR BATCH_ID IS NULL
+AND BATCH_TS IS NULL
+ORDER BY TQUEUE_ID, ACCOUNT_ID
 
 
 

@@ -443,7 +443,43 @@ create or replace PACKAGE BODY TQV AS
   BEGIN
     LOCKBATCH(batch, 1);
   END LOCKBATCH;
+  
+    --======================================================================================================
+    --======================================================================================================
+    
+  FUNCTION LOCKBATCHREF(batch IN OUT TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2 IS
+    srowid VARCHAR2(200);
+    lockedStubs TQSTUB_ARR;
+    now TIMESTAMP := SYSTIMESTAMP;
+    
+  BEGIN
+    SELECT TQSTUB(
+        ROWIDTOCHAR(ROWID),
+        TQROWID,
+        TQUEUE_ID,
+        XID,
+        SECURITY_ID,
+        SECURITY_TYPE,
+        ACCOUNT_ID,
+        BATCH_ID,
+        BATCH_TS
+    ) BULK COLLECT INTO lockedStubs
+    FROM TQSTUBS
+    WHERE ROWID IN (
+      SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
+    ) FOR UPDATE OF BATCH_ID, BATCH_TS SKIP LOCKED;
 
+    
+    UPDATE_STUBS(lockedStubs, batch);
+  
+      INSERT INTO TQBATCHES VALUES(batch) RETURNING ROWIDTOCHAR(ROWID) INTO srowid;
+      COMMIT;
+      accountId := batch.ACCOUNT;
+      tcount := batch.STUBS.COUNT;
+      RETURN srowid;
+  END LOCKBATCHREF;
+
+  --======================================================================================================
 --
   -- *******************************************************
   --    Lock all rows in all passed batches
