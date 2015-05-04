@@ -25,13 +25,18 @@
 package tqueue.reactor;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.cliffc.high_scale_lib.NonBlockingHashMapLong;
 
 import reactor.Environment;
-import static reactor.Environment.*;
+import reactor.core.config.DispatcherType;
 import reactor.fn.Consumer;
 import reactor.rx.Streams;
+import reactor.rx.broadcast.Broadcaster;
 
 /**
  * <p>Title: RQ</p>
@@ -43,51 +48,73 @@ import reactor.rx.Streams;
 
 public class RQ {
 
+	final NonBlockingHashMapLong<List<Integer>> complete = new NonBlockingHashMapLong<List<Integer>>(24);
+	final AtomicInteger c = new AtomicInteger(10);
 	/**
 	 * Creates a new RQ
 	 */
 	public RQ() {
-		final List<String> startWith = new ArrayList<String>(Arrays.asList("Foo", "Bar", "Crumb"));
-		Streams.from(startWith)
-		.observeComplete(new Consumer<Void>(){
-			@Override
-			public void accept(Void t) {
-				System.out.println("DONE");
-			}
-		})
-        .groupBy(s -> s)
-        .consume(str -> {
-            str.dispatchOn(cachedDispatcher())
-               .observeComplete(v -> System.out.println("First expansion complete on " + Thread.currentThread()))
-               .consume(s2 -> {
-                   Streams.just(s2)
-                          .dispatchOn(cachedDispatcher())
-                          .observeComplete(v -> System.out.println("Second expansion complete on " + Thread.currentThread()))
-                          .consume(s3 -> {
-                              Streams.just(s3)
-                                     .dispatchOn(cachedDispatcher())
-                                     .observeComplete(v -> System.out.println("Third expansion complete on " + Thread.currentThread()))
-                                     .consume(s4 -> System.out.println("Expansion result: " + s4));
-                          });
-               });
+		
+		final Random r = new Random(System.currentTimeMillis());
+		final List<Integer> numbers = new ArrayList<Integer>(100);
+		for(int i = 0; i < 100; i++) {
+			numbers.add(r.nextInt(101));
+		}
+		
+		Broadcaster<Integer> completionBroadcast = Broadcaster.create(Environment.cachedDispatcher());
+		Streams.wrap(completionBroadcast).observeComplete(v -> System.out.println("DONE"));
+		
+		System.out.println("STARTING:" + c);
+		Streams.from(numbers)
+        .groupBy(s -> s%10)
+        .consume(str -> {        	
+            str.dispatchOn(Environment.newDispatcher("loop", 2, 1, DispatcherType.MPSC))
+               
+               .consume(
+            		   v -> {
+            			   if(33==v || 43==v || 53==v) throw new RuntimeException();
+            			   System.out.println("[" + Thread.currentThread().getId() + "] Consumed: " + v);
+            			   List<Integer> list = complete.get(Thread.currentThread().getId());
+            			   if(list==null) {
+            				   synchronized(complete) {
+            					   list = complete.get(Thread.currentThread().getId());
+                    			   if(list==null) {
+                    				   list = new ArrayList<Integer>();
+                    				   complete.put(Thread.currentThread().getId(), list);
+                    			   }
+            				   }
+            			   }
+            			   list.add(v);               			  
+            		   },
+            		   t -> System.err.println("[" + Thread.currentThread().getId() + "] FAILED:" + t),
+            		   d ->  {
+            			   final int k = c.decrementAndGet();
+            			   System.out.println("[" + Thread.currentThread().getId() + "] Complete:" + k);
+            			   
+            		   }
+            	);        
         });		
 	}
 	
 	public static void main(String[] args) {
-		Environment.initializeIfEmpty().assignErrorJournal(new Consumer<Throwable>(){
-			@Override
-			public void accept(final Throwable t) {
-				System.err.println("Untrapped exception");
-				t.printStackTrace(System.err);
-			}
-		});		
+		Environment.initializeIfEmpty();	
+
+//		Environment.initializeIfEmpty().assignErrorJournal(new Consumer<Throwable>(){
+//			@Override
+//			public void accept(final Throwable t) {
+//				System.err.println("Untrapped exception");
+//				t.printStackTrace(System.err);
+//			}
+//		});		
 		RQ r = new RQ();
-		try {
-			Thread.currentThread().join();
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+		while(r.c.get()!=0) {
+			Thread.yield();
 		}
+		System.out.println("DONE:" + r.c);
+		for(Map.Entry<Long, List<Integer>> entry: r.complete.entrySet()) {
+			System.out.println("\n\tThread:" + entry.getKey() + ":  " + entry.getValue()); 
+		}
+		
 	}
 
 }
