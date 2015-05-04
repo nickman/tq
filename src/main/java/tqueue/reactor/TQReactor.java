@@ -29,7 +29,6 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
@@ -37,7 +36,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 import oracle.jdbc.OracleCallableStatement;
 import oracle.jdbc.OracleConnection;
@@ -50,6 +48,8 @@ import org.apache.log4j.Logger;
 
 import reactor.Environment;
 import reactor.core.Dispatcher;
+import reactor.core.config.DispatcherType;
+import reactor.core.dispatch.SynchronousDispatcher;
 import reactor.core.dispatch.wait.ParkWaitStrategy;
 import reactor.core.processor.RingBufferWorkProcessor;
 import reactor.fn.Consumer;
@@ -63,6 +63,7 @@ import tqueue.db.types.DBType;
 import tqueue.db.types.TQBATCH;
 import tqueue.db.types.TQTRADE;
 import tqueue.db.types.TQTRADE_ARR;
+import tqueue.helpers.JMXHelper;
 //import tqueue.db.localtypes.*;
 import tqueue.pools.ConnectionPool;
 
@@ -79,11 +80,12 @@ import com.codahale.metrics.MetricRegistry;
  * <p><code>tqueue.reactor.TQReactor</code></p>
  */
 
-public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
+public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The TQReactor singleton instance */
 	private static volatile TQReactor instance = null;
 	/** The TQReactor singleton instance ctor lock */
 	private static final Object lock = new Object();
+	
 	
 	/** The number of available cpus */
 	public static final int CORES = ManagementFactory.getOperatingSystemMXBean().getAvailableProcessors();
@@ -158,12 +160,16 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	/** The number of parallel streams to run per core */
 	private int streamsPerCore = 1;
 	
+	/** Indicates if the poller config changed */
+	private final AtomicBoolean pollerConfigChanged = new AtomicBoolean(false);
+	
 	
 	Control ctx = null;
 	
 	/** The thread factory for the ring buffer's executor service */
 	protected final ThreadFactory tf = new ThreadFactory() {
 		final AtomicInteger serial = new AtomicInteger(0);
+		@Override
 		public Thread newThread(final Runnable r) {
 			Thread t = new Thread(r, "TQReactorThread#" + serial.incrementAndGet());
 			t.setDaemon(true);
@@ -283,7 +289,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 		inFlightMetric = registry.histogram("inFlightBatches");
 		avgRingBufferCap = registry.histogram("avgRingBufferCap");
 		
-		
+		JMXHelper.registerMBean(this, OBJECT_NAME);
 		
 		
 		
@@ -429,7 +435,7 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	for(int i = 0; i < totalStreams; i++) {
 		final int k = i;
 		groupConsumers.put(i, new Consumer<BatchRoutingKey>(){
-			final Dispatcher dispatcher = Environment.cachedDispatcher();
+			final Dispatcher dispatcher = Environment.newDispatcher(1, 1, DispatcherType.RING_BUFFER);
 			@Override
 			public void accept(final BatchRoutingKey batch) {							
 				dispatcher.dispatch(batch, batchConsumer(k), errorConsumer(k));					
@@ -734,42 +740,132 @@ public class TQReactor implements Iterator<TQBATCH>, Runnable, ThreadFactory {
 	}
 	
 
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQReactorMBean#getActiveCount()
+	 */
 	@Override
-	public boolean hasNext() {
-		return started.get();
+	public int getActiveCount() {		
+		return tpe.getActiveCount();
+	}	
+	
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQReactorMBean#getCompletedTaskCount()
+	 */
+	@Override
+	public long getCompletedTaskCount() {
+		return tpe.getCompletedTaskCount();
+	}
+	
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQReactorMBean#getCorePoolSize()
+	 */
+	@Override
+	public int getCorePoolSize() {
+		return tpe.getCorePoolSize();
 	}
 
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQReactorMBean#getLargestPoolSize()
+	 */
 	@Override
-	public TQBATCH next() {
-		try {
-			if(!pollerRset.next()) {
-				pollerRset.close();
-				pollerPs.setInt(1, lastTradeQueueId);
-				pollerPs.setInt(2, maxRows);
-				pollerPs.setInt(3, maxBatchSize);
-				pollerRset = (OracleResultSet)pollerPs.executeQuery();
-				return next();
-			} else {
-				TQBATCH batch = (TQBATCH)((OracleResultSet)pollerRset).getORAData(1, tqBatchOraDataFactory);
-				pollerCs.setORAData(1, batch);
-				pollerCs.setInt(2, 0);
-				pollerCs.execute();
-				batch = (TQBATCH)pollerCs.getORAData(1, TQBATCH.getORADataFactory());
-				lastTradeQueueId = batch.getLastT();
-				return batch;
-			}
-			
-		} catch (Exception ex) {
-			throw new RuntimeException("next() exception", ex);
-		}
-		
-		
+	public int getLargestPoolSize() {
+		return tpe.getLargestPoolSize();
+	}
+	
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQReactorMBean#getMaximumPoolSize()
+	 */
+	@Override
+	public int getMaximumPoolSize() {		
+		return tpe.getMaximumPoolSize();
+	}
+	
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQReactorMBean#getPoolSize()
+	 */
+	@Override
+	public int getPoolSize() {		
+		return tpe.getPoolSize();
+	}
+	
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQReactorMBean#getTaskCount()
+	 */
+	@Override
+	public long getTaskCount() {
+		return tpe.getTaskCount();
 	}
 
+	/**
+	 * Returns the max number of rows to poll from the DB
+	 * @return the maxRows
+	 */
 	@Override
-	public void remove() {
-		/* No Op */		
+	public int getMaxRows() {
+		return maxRows;
 	}
+
+	/**
+	 * Sets the max number of rows to poll from the DB
+	 * @param maxRows the maxRows to set
+	 */
+	@Override
+	public void setMaxRows(final int maxRows) {
+		if(maxRows < 1) throw new IllegalArgumentException("Invalid max Rows count:" + maxRows);
+		pollerConfigChanged.set(maxRows != this.maxRows);		
+		this.maxRows = maxRows;
+	}
+
+	/**
+	 * Returns the maximum batch size to retrieve from the DB
+	 * @return the maxBatchSize
+	 */
+	@Override
+	public int getMaxBatchSize() {
+		return maxBatchSize;
+	}
+
+	/**
+	 * Sets the maximum batch size to poll from the DB 
+	 * @param maxBatchSize the maxBatchSize to set
+	 */
+	@Override
+	public void setMaxBatchSize(final int maxBatchSize) {
+		if(maxBatchSize < 1) throw new IllegalArgumentException("Invalid max batch size:" + maxBatchSize);
+		pollerConfigChanged.set(maxBatchSize != this.maxBatchSize);
+		this.maxBatchSize = maxBatchSize;
+		this.maxBatchSize = maxBatchSize;
+	}
+
+	/**
+	 * Returns the poller wait time on the DB side in seconds
+	 * @return the pollWaitTime
+	 */
+	@Override
+	public int getPollWaitTime() {
+		return pollWaitTime;
+	}
+
+	/**
+	 * Sets the poller wait time on the DB side in seconds
+	 * @param pollWaitTime the pollWaitTime to set in seconds
+	 */
+	@Override
+	public void setPollWaitTime(final int pollWaitTime) {
+		if(pollWaitTime < 0) throw new IllegalArgumentException("Invalid wait time:" + pollWaitTime);
+		pollerConfigChanged.set(pollWaitTime != this.pollWaitTime);
+		this.pollWaitTime = pollWaitTime;
+	}
+	
+	
+	
 	
 
 }

@@ -24,6 +24,10 @@
  */
 package tqueue.reactor;
 
+import javax.management.ObjectName;
+
+import tqueue.helpers.JMXHelper;
+
 /**
  * <p>Title: TQReactorMBean</p>
  * <p>Description: JMX interface for {@link TQReactor}</p> 
@@ -33,5 +37,88 @@ package tqueue.reactor;
  */
 
 public interface TQReactorMBean {
+	/** The TQReactor's JMX ObjectName */
+	public static final ObjectName OBJECT_NAME = JMXHelper.objectName("tqueue:service=TQReactor");
 
+	/**
+	 * Returns the number of active threads in the thread pool
+	 * @return the number of active threads in the thread pool
+	 */
+	public int getActiveCount();
+	
+	/**
+	 * Returns the number of completed tasks in the thread pool
+	 * @return the number of completed tasks in the thread pool
+	 */
+	public long getCompletedTaskCount();
+	
+	/**
+	 * Returns the number of scheduled tasks in the thread pool
+	 * @return the number of scheduled tasks in the thread pool
+	 */
+	public long getTaskCount();
+	
+	
+	/**
+	 * Returns the thread pool's core size
+	 * @return the thread pool's core size
+	 */
+	public int getCorePoolSize();
+	
+	/**
+	 * Returns the thread pool's current size
+	 * @return the thread pool's current size
+	 */
+	public int getPoolSize();
+	
+	
+	/**
+	 * Returns the thread pool's highwater mark size
+	 * @return the thread pool's highwater mark size
+	 */
+	public int getLargestPoolSize();
+	
+	/**
+	 * Returns the thread pool's max size
+	 * @return the thread pool's max size
+	 */
+	public int getMaximumPoolSize();
+	
+	/**
+	 * Returns the max number of rows to poll from the DB
+	 * @return the maxRows
+	 */
+	public int getMaxRows();
+
+	/**
+	 * Sets the max number of rows to poll from the DB
+	 * @param maxRows the maxRows to set
+	 */
+	public void setMaxRows(final int maxRows);
+
+	/**
+	 * Returns the maximum batch size to retrieve from the DB
+	 * @return the maxBatchSize
+	 */
+	public int getMaxBatchSize();
+
+	/**
+	 * Sets the maximum batch size to poll from the DB 
+	 * @param maxBatchSize the maxBatchSize to set
+	 */
+	public void setMaxBatchSize(final int maxBatchSize);
+
+	/**
+	 * Returns the poller wait time on the DB side in seconds
+	 * @return the pollWaitTime
+	 */
+	public int getPollWaitTime();
+
+	/**
+	 * Sets the poller wait time on the DB side in seconds
+	 * @param pollWaitTime the pollWaitTime to set in seconds
+	 */
+	public void setPollWaitTime(final int pollWaitTime);
+	
+	
 }
