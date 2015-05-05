@@ -258,8 +258,8 @@ create or replace PACKAGE BODY TQV AS
   BEGIN
     DBMS_ALERT.REGISTER('TQSTUB.ALERT.EVENT');
     DBMS_ALERT.WAITONE('TQSTUB.ALERT.EVENT', message, status, WAIT_TIME);
-    IF status = 1 THEN
-      events := 0;
+    IF status = 1 THEN  
+      events := -1;   --TIMEOUT
     ELSIF status = 0 THEN
       events := TO_NUMBER(RTRIM(LTRIM(message)));
     END IF;
@@ -281,8 +281,7 @@ create or replace PACKAGE BODY TQV AS
   FUNCTION QUERYTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10, WAIT_TIME IN INT DEFAULT 0) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE IS
       batchy TQBATCH;
       latency NUMBER  := 0;
-      pipedRows PLS_INTEGER := 0;
-      waitCount PLS_INTEGER := 0;
+      pipedRows PLS_INTEGER := 0;      
       events NUMBER := 0;
       cursor qx is SELECT VALUE(T) FROM TABLE (
           TQV.TRADEBATCH(
@@ -309,18 +308,14 @@ create or replace PACKAGE BODY TQV AS
             pipedRows := pipedRows + 1;
           END LOOP;
         close qx;
-        IF pipedRows > 0 OR waitCount = 1 OR WAIT_TIME = 0 THEN
+        IF WAIT_TIME < 1 THEN
           RETURN;
-        END IF;
-        waitCount := waitCount + 1;
+        END IF;        
         events := WAITONSIGNAL(WAIT_TIME);
-        IF events = 0 THEN
-          IF waitCount = 1 THEN
-            CONTINUE;
-          END IF;
-          PIPE ROW (new TQBATCH(-1, 0, -1, -1, -1, NULL, NULL));
-          RETURN;
+        IF events = -1 THEN
+          RETURN;   -- We timed out
         END IF;
+        CONTINUE;
       END LOOP;
     RETURN;
 

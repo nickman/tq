@@ -112,7 +112,7 @@ public class ConnectionPool {
 		//config.setJdbcUrl("jdbc:oracle:thin:@//leopard:1521/XE");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
 		config.setMetricRegistry(registry);
-		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
 		config.setUsername("tqreactor");
 		config.setPassword("tq");
 		config.addDataSourceProperty("cachePrepStmts", "true");

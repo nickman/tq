@@ -39,6 +39,8 @@ import org.cliffc.high_scale_lib.NonBlockingHashMapLong;
 
 import reactor.Environment;
 import reactor.core.config.DispatcherType;
+import reactor.fn.Consumer;
+import reactor.fn.Function;
 import reactor.rx.Stream;
 import reactor.rx.StreamUtils;
 import reactor.rx.Streams;
@@ -77,15 +79,14 @@ public class RQ implements Iterable<Integer>, Iterator<Integer> {
 	 */
 	public RQ() {
 
-		Broadcaster<Integer> broadcaster = Broadcaster.create(Environment
-				.cachedDispatcher());
-
+		Broadcaster<Integer> broadcaster = Broadcaster.create(Environment.get(), Environment.get().newDispatcher(32, 1, DispatcherType.RING_BUFFER));
+		
 		System.out.println("STARTING:" + c);
 		reset(false);
 		Streams.from(taps).consume(str -> {
 			str.consume(i -> lastValue.set(i));
 		});
-		rootStream = Streams.wrap(broadcaster);
+		rootStream = Streams.wrap(broadcaster);		
 		ctx = rootStream
 				.groupBy(s -> s % 10)
 				.consume(
@@ -100,6 +101,10 @@ public class RQ implements Iterable<Integer>, Iterator<Integer> {
 											t -> {
 												final int k = c.decrementAndGet();
 												System.err.println("["+ Thread.currentThread().getId()+ "] FAILED:"+ t + " / " + k);
+												if(!RuntimeException.class.equals(t.getClass())) {
+													t.printStackTrace(System.err);
+//													ctx.cancel();
+												}
 												reset(true);
 											},
 											d -> {
@@ -115,7 +120,7 @@ public class RQ implements Iterable<Integer>, Iterator<Integer> {
 	private static final ThreadLocal<Boolean> threadNameInited = new ThreadLocal<Boolean>();
 	
 	public void process(final int v) {
-		try { Thread.currentThread().join(100);} catch (Exception x) {/* No Op */}
+		try { Thread.sleep(10);} catch (Exception x) {/* No Op */}
 		final long t = Thread.currentThread().getId();
 		if(threadNameInited.get()==null) {
 			char[] chars = Integer.toString(v).toCharArray();
@@ -141,6 +146,7 @@ public class RQ implements Iterable<Integer>, Iterator<Integer> {
 				if(cthreads==null) {
 					cthreads = new HashSet<String>();
 					concurrentThreads.put(t, cthreads);
+					log("Recorded thread: [%s]", Thread.currentThread());
 				}
 			}
 		}
@@ -149,30 +155,21 @@ public class RQ implements Iterable<Integer>, Iterator<Integer> {
 
 	public void reset(final boolean dump) {
 		if (dump && ctx != null) {
-			//System.err.println("Stream Path:\n" + ctx.debug().toString());
-			//ctx.debug().toMap()
 			final Map<Object, Object> streamMap = StreamUtils.browse(rootStream).toMap();
-			log("StreamMap:\n%s", streamMap);
-//			for(Map.Entry<Object, Object> entry: streamMap.entrySet()) {
-//				log("StreamMap Entry k:[%s : %s], v:[%s : %s]", entry.getKey().getClass().getName(), entry.getKey(), entry.getValue().getClass().getName(), entry.getValue());
-//				if(entry.getValue() instanceof ArrayList) {
-//					ArrayList<Object> al = (ArrayList)entry.getValue();
-//					for(Object o: al) {
-//						log("\tStreamList Entry :[%s : %s]", o.getClass().getName(), o);
-//					}
-//				}
-//			}
+			log("StreamMap:\n%s", ctx.debug().toString());
 		}
-		iterBase.set(lastValue.get() + (dump ? -1 : 0));
-		nextFail = lastValue.get() + Math.abs(R.nextInt(101));
-		log("Base iterator reset. Last Value was [%s]. Next fail at %s",lastValue.get(), nextFail);
+		final int lastVal = lastValue.get();
+		iterBase.set(lastVal + (dump ? -1 : 0));
+		nextFail = lastVal + Math.abs(R.nextInt(1001));
+		log("Base iterator reset. Last Value was [%s]. Next fail at %s", lastVal, nextFail);
 		lastValue.set(-1);
 		if (dump) {
 			TreeMap<Long, List<Integer>> sortedComplete = new TreeMap<Long, List<Integer>>(complete);
+			complete.clear();
 			for (Map.Entry<Long, List<Integer>> entry : sortedComplete.entrySet()) {
 				log("\tThread:" + entry.getKey() + ":  " + entry.getValue() + "\tCThreads:" + concurrentThreads.get(entry.getKey()));
 			}
-			complete.clear();
+			
 		}
 
 	}
@@ -216,7 +213,7 @@ public class RQ implements Iterable<Integer>, Iterator<Integer> {
 
 	@Override
 	public Integer next() {		
-		try { Thread.currentThread().join(100);} catch (Exception x) {/* No Op */}
+//		try { Thread.currentThread().join(10);} catch (Exception x) {/* No Op */}
 		return iterBase.incrementAndGet();
 	}
 

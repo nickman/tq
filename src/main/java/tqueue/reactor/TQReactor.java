@@ -24,12 +24,12 @@
  */
 package tqueue.reactor;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.lang.management.ManagementFactory;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -47,9 +47,7 @@ import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Logger;
 
 import reactor.Environment;
-import reactor.core.Dispatcher;
 import reactor.core.config.DispatcherType;
-import reactor.core.dispatch.SynchronousDispatcher;
 import reactor.core.dispatch.wait.ParkWaitStrategy;
 import reactor.core.processor.RingBufferWorkProcessor;
 import reactor.fn.Consumer;
@@ -154,7 +152,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The poller's maximum batch size */
 	private int maxBatchSize = 1000;
 	/** The poller's wait period in seconds when waiting for the next rows to become available */
-	private int pollWaitTime = 3;
+	private int pollWaitTime = 1;
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
 	private int pollWaitLoops = 10;
 	/** The number of parallel streams to run per core */
@@ -244,11 +242,67 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 		tqr.log.info("TQReactor Test");
 		try {
 			tqr.start();
-			tqr.pollerThread.join();
+			//tqr.pollerThread.join();
+			tqr.clHandler();
 		} catch (Exception ex) {
 			ex.printStackTrace(System.err);
 		}
 	}
+	
+	private void clHandler() {
+		BufferedReader br = null;
+		InputStreamReader isr = null;
+		try {
+			br = new BufferedReader(new InputStreamReader(System.in));
+			String line = null;
+			while(true) {
+				line = br.readLine();
+				if(line!=null) {
+					if("r".equalsIgnoreCase(line)) {
+						try {
+							pollerPs.cancel();
+						} catch (Exception ex) {
+							log.error("Failed to reset ps", ex);
+						}
+					} else if("exit".equalsIgnoreCase(line)) {						
+						log.info("\n\t===========================================\n\tReactor Environment Shutting Down ......\n\t===========================================");
+						Environment.get().shutdown();
+						log.info("Shutdown Complete. Exiting....");
+						System.exit(0);
+					}
+				}
+			}
+		} catch (Exception ex) {
+			System.err.println("CL Command Handler Failed");
+			ex.printStackTrace(System.err);
+		}
+	}
+	
+	/*
+	 * Error when cancelling waiting query:
+java.sql.SQLTimeoutException: ORA-01013: user requested cancel of current operation
+ORA-06512: at "SYS.DBMS_ALERT", line 118
+ORA-06512: at "TQREACTOR.TQV", line 270
+ORA-20000: ORU-10015: error:3 waiting for pipe message.
+ORA-06512: at "TQREACTOR.TQV", line 314
+ORA-06512: at line 1
+
+	at oracle.jdbc.driver.T4CTTIoer.processError(T4CTTIoer.java:440)
+	at oracle.jdbc.driver.T4CTTIoer.processError(T4CTTIoer.java:396)
+	at oracle.jdbc.driver.T4C8Oall.processError(T4C8Oall.java:837)
+	at oracle.jdbc.driver.T4CTTIfun.receive(T4CTTIfun.java:445)
+	at oracle.jdbc.driver.T4CTTIfun.doRPC(T4CTTIfun.java:191)
+	at oracle.jdbc.driver.T4C8Oall.doOALL(T4C8Oall.java:523)
+	at oracle.jdbc.driver.T4CPreparedStatement.doOall8(T4CPreparedStatement.java:207)
+	at oracle.jdbc.driver.T4CPreparedStatement.executeForDescribe(T4CPreparedStatement.java:863)
+	at oracle.jdbc.driver.OracleStatement.executeMaybeDescribe(OracleStatement.java:1153)
+	at oracle.jdbc.driver.OracleStatement.doExecuteWithTimeout(OracleStatement.java:1275)
+	at oracle.jdbc.driver.OraclePreparedStatement.executeInternal(OraclePreparedStatement.java:3576)
+	at oracle.jdbc.driver.OraclePreparedStatement.executeQuery(OraclePreparedStatement.java:3620)
+	at oracle.jdbc.driver.OraclePreparedStatementWrapper.executeQuery(OraclePreparedStatementWrapper.java:1491)
+	at tqueue.reactor.TQReactor.run(TQReactor.java:552)
+	at java.lang.Thread.run(Thread.java:745)
+	 */
 	
 	private TQReactor() {
 		Environment.initializeIfEmpty().assignErrorJournal(new Consumer<Throwable>(){
@@ -400,7 +454,16 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	}
 		
 
-	
+	public void process(final BatchRoutingKey batch) {
+		final int tcount = batch.getTcount();
+		log.info("[" + Thread.currentThread() + "] Processing [" + tcount + "] Trades");
+		tradesPerSec.mark(tcount);
+		batchesPerSec.mark();
+		avgBatchSize.update(tcount);
+
+		processBatch(batch);
+		inFlight.decrementAndGet();		
+	}
 	
 	
 	
@@ -429,20 +492,28 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 		log.info("\n\t=====================================\n\tRingBuffer Slots:" + ringBufferSize + "\n\t=====================================");
 		tpe = new ThreadPoolExecutor(CORES * 4, CORES * 4, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
 		tpe.prestartAllCoreThreads();
-		ringBuffer = RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());		
+		ringBuffer = RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());
 		
-	final Map<Integer, Consumer<BatchRoutingKey>> groupConsumers = new HashMap<Integer, Consumer<BatchRoutingKey>>(totalStreams);
-	for(int i = 0; i < totalStreams; i++) {
-		final int k = i;
-		groupConsumers.put(i, new Consumer<BatchRoutingKey>(){
-			final Dispatcher dispatcher = Environment.newDispatcher(1, 1, DispatcherType.RING_BUFFER);
-			@Override
-			public void accept(final BatchRoutingKey batch) {							
-				dispatcher.dispatch(batch, batchConsumer(k), errorConsumer(k));					
-			}
-		});			
-	}
 		ctx = Streams.wrap(ringBuffer)
+			.groupBy(brk -> brk.getAccountId() % totalStreams)
+			.dispatchOn(Environment.get(), Environment.newDispatcher("tqprocessor", 1, 1, DispatcherType.RING_BUFFER))
+			.observe(sg -> sg.observe(brk -> inFlight.incrementAndGet()))
+			.consume(str -> 
+				str.consume(brk -> process(brk))
+			);
+		
+//	final Map<Integer, Consumer<BatchRoutingKey>> groupConsumers = new HashMap<Integer, Consumer<BatchRoutingKey>>(totalStreams);
+//	for(int i = 0; i < totalStreams; i++) {
+//		final int k = i;
+//		groupConsumers.put(i, new Consumer<BatchRoutingKey>(){
+//			final Dispatcher dispatcher = Environment.newDispatcher(1, 1, DispatcherType.RING_BUFFER);
+//			@Override
+//			public void accept(final BatchRoutingKey batch) {							
+//				dispatcher.dispatch(batch, batchConsumer(k), errorConsumer(k));					
+//			}
+//		});			
+//	}
+//		ctx = Streams.wrap(ringBuffer)
 //			.observe(t -> {				
 //				inFlight.incrementAndGet();
 //				try {
@@ -455,13 +526,13 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 //			.observeComplete(x -> 
 //				inFlight.decrementAndGet()
 //			)
-			.groupBy(groupFunction(totalStreams))
-			.consume(new Consumer<GroupedStream<Integer, BatchRoutingKey>>() {
-				@Override
-				public void accept(final GroupedStream<Integer, BatchRoutingKey> t) {
-					t.capacity(1).consume(groupConsumers.get(t.key()));					
-				}
-			});
+//			.groupBy(groupFunction(totalStreams))
+//			.consume(new Consumer<GroupedStream<Integer, BatchRoutingKey>>() {
+//				@Override
+//				public void accept(final GroupedStream<Integer, BatchRoutingKey> t) {
+//					t.capacity(1).consume(groupConsumers.get(t.key()));					
+//				}
+//			});
 				
 		
 //		ringBuffer.subscribe(sink);
@@ -476,7 +547,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	 */
 	@Override
 	public void run() {
-		
+		int loopCount = 0;
 		while(started.get()) {
 			if(pollerBarrier.get() > 0) {
 				log.info("Waiting on poller barrier...");
@@ -505,6 +576,10 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 				pollerPs.setInt(4, pollWaitTime);			
 				
 				pollerRset = (OracleResultSet)pollerPs.executeQuery();
+				if(loopCount>0) {
+					log.info("========================================== Loop:" + loopCount);
+				}
+
 				
 				pollerRset.setFetchSize(maxBatchSize);
 				int batchCount = 0;
@@ -553,6 +628,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 					
 					//sink.onNext(postBatch);
 				}
+				loopCount++;
 				pollerRset.close();
 				if(batchCount>0 | dropCount>0) {
 				log.info(new StringBuilder("Polling loop: batches:")
