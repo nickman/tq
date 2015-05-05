@@ -25,96 +25,204 @@
 package tqueue.reactor;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.cliffc.high_scale_lib.NonBlockingHashMapLong;
 
 import reactor.Environment;
 import reactor.core.config.DispatcherType;
-import reactor.fn.Consumer;
+import reactor.rx.Stream;
+import reactor.rx.StreamUtils;
 import reactor.rx.Streams;
+import reactor.rx.action.Control;
 import reactor.rx.broadcast.Broadcaster;
 
 /**
- * <p>Title: RQ</p>
- * <p>Description: </p> 
- * <p>Company: Helios Development Group LLC</p>
+ * <p>
+ * Title: RQ
+ * </p>
+ * <p>
+ * Description:
+ * </p>
+ * <p>
+ * Company: Helios Development Group LLC
+ * </p>
+ * 
  * @author Whitehead (nwhitehead AT heliosdev DOT org)
- * <p><code>tqueue.reactor.RQ</code></p>
+ *         <p>
+ *         <code>tqueue.reactor.RQ</code>
+ *         </p>
  */
 
-public class RQ {
+public class RQ implements Iterable<Integer>, Iterator<Integer> {
 
 	final NonBlockingHashMapLong<List<Integer>> complete = new NonBlockingHashMapLong<List<Integer>>(24);
+	final NonBlockingHashMapLong<Set<String>> concurrentThreads = new NonBlockingHashMapLong<Set<String>>(24);
 	final AtomicInteger c = new AtomicInteger(10);
+	final Set<Stream<Integer>> taps = new CopyOnWriteArraySet<Stream<Integer>>();
+	final AtomicInteger lastValue = new AtomicInteger(-1);
+	final Control ctx;
+	final Stream<Integer> rootStream;
+
 	/**
 	 * Creates a new RQ
 	 */
 	public RQ() {
-		
-		final Random r = new Random(System.currentTimeMillis());
-		final List<Integer> numbers = new ArrayList<Integer>(100);
-		for(int i = 0; i < 100; i++) {
-			numbers.add(r.nextInt(101));
-		}
-		
-		Broadcaster<Integer> completionBroadcast = Broadcaster.create(Environment.cachedDispatcher());
-		Streams.wrap(completionBroadcast).observeComplete(v -> System.out.println("DONE"));
-		
+
+		Broadcaster<Integer> broadcaster = Broadcaster.create(Environment
+				.cachedDispatcher());
+
 		System.out.println("STARTING:" + c);
-		Streams.from(numbers)
-        .groupBy(s -> s%10)
-        .consume(str -> {        	
-            str.dispatchOn(Environment.newDispatcher("loop", 2, 1, DispatcherType.MPSC))
-               
-               .consume(
-            		   v -> {
-            			   if(33==v || 43==v || 53==v) throw new RuntimeException();
-            			   System.out.println("[" + Thread.currentThread().getId() + "] Consumed: " + v);
-            			   List<Integer> list = complete.get(Thread.currentThread().getId());
-            			   if(list==null) {
-            				   synchronized(complete) {
-            					   list = complete.get(Thread.currentThread().getId());
-                    			   if(list==null) {
-                    				   list = new ArrayList<Integer>();
-                    				   complete.put(Thread.currentThread().getId(), list);
-                    			   }
-            				   }
-            			   }
-            			   list.add(v);               			  
-            		   },
-            		   t -> System.err.println("[" + Thread.currentThread().getId() + "] FAILED:" + t),
-            		   d ->  {
-            			   final int k = c.decrementAndGet();
-            			   System.out.println("[" + Thread.currentThread().getId() + "] Complete:" + k);
-            			   
-            		   }
-            	);        
-        });		
+		reset(false);
+		Streams.from(taps).consume(str -> {
+			str.consume(i -> lastValue.set(i));
+		});
+		rootStream = Streams.wrap(broadcaster);
+		ctx = rootStream
+				.groupBy(s -> s % 10)
+				.consume(
+						str -> {
+							str.capacity(20)
+							  .dispatchOn(
+									Environment.newDispatcher("loop", 1, 1, DispatcherType.MPSC))
+										.observe(i -> {
+											lastValue.set(i);
+										})
+										.consume(v -> process(v),
+											t -> {
+												final int k = c.decrementAndGet();
+												System.err.println("["+ Thread.currentThread().getId()+ "] FAILED:"+ t + " / " + k);
+												reset(true);
+											},
+											d -> {
+												final int k = c.decrementAndGet();
+												System.out.println("[" + Thread.currentThread().getId()	+ "] Complete:" + k);
+											});
+						});
+		while(true) {
+			broadcaster.onNext(this.next());
+		}
 	}
 	
-	public static void main(String[] args) {
-		Environment.initializeIfEmpty();	
+	private static final ThreadLocal<Boolean> threadNameInited = new ThreadLocal<Boolean>();
+	
+	public void process(final int v) {
+		try { Thread.currentThread().join(100);} catch (Exception x) {/* No Op */}
+		final long t = Thread.currentThread().getId();
+		if(threadNameInited.get()==null) {
+			char[] chars = Integer.toString(v).toCharArray();
+			Thread.currentThread().setName("ModThread-" + chars[chars.length-1]);
+			threadNameInited.set(true);
+		}
+		if (v == nextFail) throw new RuntimeException();
+		List<Integer> list = complete.get(t);
+		if (list == null) {
+			synchronized (complete) {
+				list = complete.get(t);
+				if (list == null) {
+					list = new ArrayList<Integer>();
+					complete.put(t,list);
+				}
+			}
+		}
+		list.add(v);
+		Set<String> cthreads = concurrentThreads.get(t);
+		if(cthreads==null) {
+			synchronized(concurrentThreads) {
+				cthreads = concurrentThreads.get(t);
+				if(cthreads==null) {
+					cthreads = new HashSet<String>();
+					concurrentThreads.put(t, cthreads);
+				}
+			}
+		}
+		cthreads.add(Thread.currentThread().getName());
+	}
 
-//		Environment.initializeIfEmpty().assignErrorJournal(new Consumer<Throwable>(){
-//			@Override
-//			public void accept(final Throwable t) {
-//				System.err.println("Untrapped exception");
-//				t.printStackTrace(System.err);
+	public void reset(final boolean dump) {
+		if (dump && ctx != null) {
+			//System.err.println("Stream Path:\n" + ctx.debug().toString());
+			//ctx.debug().toMap()
+			final Map<Object, Object> streamMap = StreamUtils.browse(rootStream).toMap();
+			log("StreamMap:\n%s", streamMap);
+//			for(Map.Entry<Object, Object> entry: streamMap.entrySet()) {
+//				log("StreamMap Entry k:[%s : %s], v:[%s : %s]", entry.getKey().getClass().getName(), entry.getKey(), entry.getValue().getClass().getName(), entry.getValue());
+//				if(entry.getValue() instanceof ArrayList) {
+//					ArrayList<Object> al = (ArrayList)entry.getValue();
+//					for(Object o: al) {
+//						log("\tStreamList Entry :[%s : %s]", o.getClass().getName(), o);
+//					}
+//				}
 //			}
-//		});		
+		}
+		iterBase.set(lastValue.get() + (dump ? -1 : 0));
+		nextFail = lastValue.get() + Math.abs(R.nextInt(101));
+		log("Base iterator reset. Last Value was [%s]. Next fail at %s",lastValue.get(), nextFail);
+		lastValue.set(-1);
+		if (dump) {
+			TreeMap<Long, List<Integer>> sortedComplete = new TreeMap<Long, List<Integer>>(complete);
+			for (Map.Entry<Long, List<Integer>> entry : sortedComplete.entrySet()) {
+				log("\tThread:" + entry.getKey() + ":  " + entry.getValue() + "\tCThreads:" + concurrentThreads.get(entry.getKey()));
+			}
+			complete.clear();
+		}
+
+	}
+
+	public static void log(final Object fmt, final Object... args) {
+		System.out.println(String.format("[" + Thread.currentThread() + "]:"
+				+ fmt.toString(), args));
+	}
+
+	public static void main(String[] args) {
+		Environment.initializeIfEmpty();
+
+		// Environment.initializeIfEmpty().assignErrorJournal(new
+		// Consumer<Throwable>(){
+		// @Override
+		// public void accept(final Throwable t) {
+		// System.err.println("Untrapped exception");
+		// t.printStackTrace(System.err);
+		// }
+		// });
 		RQ r = new RQ();
-		while(r.c.get()!=0) {
+		while (r.c.get() != 0) {
 			Thread.yield();
 		}
 		System.out.println("DONE:" + r.c);
-		for(Map.Entry<Long, List<Integer>> entry: r.complete.entrySet()) {
-			System.out.println("\n\tThread:" + entry.getKey() + ":  " + entry.getValue()); 
+		for (Map.Entry<Long, List<Integer>> entry : r.complete.entrySet()) {
+			System.out.println("\n\tThread:" + entry.getKey() + ":  "
+					+ entry.getValue() + "\tCThreads:" + r.concurrentThreads.get(entry.getKey()));
 		}
-		
+
+	}
+
+	protected final AtomicInteger iterBase = new AtomicInteger(0);
+	protected final Random R = new Random(System.currentTimeMillis());
+	protected int nextFail = Math.abs(R.nextInt(101));
+
+	@Override
+	public boolean hasNext() {
+		return iterBase.get() < Integer.MAX_VALUE;
+	}
+
+	@Override
+	public Integer next() {		
+		try { Thread.currentThread().join(100);} catch (Exception x) {/* No Op */}
+		return iterBase.incrementAndGet();
+	}
+
+	@Override
+	public Iterator<Integer> iterator() {
+		return this;
 	}
 
 }
