@@ -51,6 +51,12 @@ public abstract class TQException extends RuntimeException {
 		super(message, cause);
 		this.batch = batch;
 	}
+	
+	/**
+	 * Indicates if this exception is recoverable
+	 * @return true if this exception is recoverable, false otherwise
+	 */
+	public abstract boolean isRecoverable();
 
 
 

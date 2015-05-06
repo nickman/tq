@@ -56,6 +56,14 @@ public class RecoverableTQException extends TQException {
 		super(batch, message, null);
 	}
 	
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQException#isRecoverable()
+	 */
+	@Override
+	public boolean isRecoverable() {
+		return true;
+	}
 
 
 

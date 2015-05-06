@@ -58,7 +58,14 @@ public class UnrecoverableTQException extends TQException {
 	}
 	
 
-
+	/**
+	 * {@inheritDoc}
+	 * @see tqueue.reactor.TQException#isRecoverable()
+	 */
+	@Override
+	public boolean isRecoverable() {
+		return false;
+	}
 
 
 }

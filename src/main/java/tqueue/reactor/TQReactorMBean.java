@@ -24,6 +24,8 @@
  */
 package tqueue.reactor;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import javax.management.ObjectName;
 
 import tqueue.helpers.JMXHelper;
@@ -151,5 +153,27 @@ public interface TQReactorMBean {
 	 * @return the dropCount
 	 */
 	public int getDropCount();
+	
+	/**
+	 * Returns the total number of recoverable TQ exceptions
+	 * @return the total number of recoverable TQ exceptions
+	 */
+	public int getRecovErrs();
+
+	/**
+	 * Returns the total number of unrecoverable TQ exceptions
+	 * @return the unrecovErrs the total number of unrecoverable TQ exceptions
+	 */
+	public int getUnrecovErrs();	
+	
+	/**
+	 * Returns the starting range of the next poll
+	 * @return the starting range of the next poll
+	 */
+	public int getNextPollerStart();
+	
+	public void reset();
+	
+	public void reset(int nextId);
 
 }

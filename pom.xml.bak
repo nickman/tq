@@ -24,7 +24,6 @@
 		<metrics.version>4.0.0-SNAPSHOT</metrics.version>
 		<reactor.version>2.0.0.RELEASE</reactor.version>
 		<slf4j.version>1.7.7</slf4j.version>
-		<hawtio.version>1.4.50</hawtio.version>
 		<!-- Plugin Versions -->
 		<jar-plugin.version>2.3</jar-plugin.version>
 		<source-plugin.version>2.2</source-plugin.version>
@@ -53,24 +52,23 @@
 			<version>${junit.version}</version>
 		</dependency>
 		
-		
 		<dependency>
 		  <groupId>io.hawt</groupId>
 		  <artifactId>hawtio-embedded</artifactId>
-		  <version>${hawtio.version}</version>
+		  <version>1.4.50</version>
 		</dependency>
 		
-		<dependency>
-		  <groupId>io.hawt</groupId>
-		  <artifactId>hawtio-web</artifactId>
-		  <version>${hawtio.version}</version>
-		  <type>war</type>
-		</dependency>
 		
 
 		<dependency>
 			<groupId>com.oracle</groupId>
 			<artifactId>ojdbc6</artifactId>
+			<version>${oracle.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.oracle</groupId>
+			<artifactId>sqlj</artifactId>
 			<version>${oracle.version}</version>
 		</dependency>
 
