@@ -38,18 +38,21 @@ public class BatchRoutingKey {
 	final String rowid;
 	final int accountId;
 	final int tcount;
+	final int firstTrade;
 	
 	/**
 	 * Creates a new BatchRoutingKey
 	 * @param rowid The char of the ROWID for the batch
 	 * @param accountId The account id to route by
 	 * @param tcount The stub count
+	 * @param firstTrade The first trade in the batch
 	 */
-	public BatchRoutingKey(final String rowid, final int accountId, final int tcount) {
+	public BatchRoutingKey(final String rowid, final int accountId, final int tcount, final int firstTrade) {
 		super();
 		this.rowid = rowid;
 		this.accountId = accountId;
 		this.tcount = tcount;
+		this.firstTrade = firstTrade;
 	}
 	
 	
@@ -118,6 +121,15 @@ public class BatchRoutingKey {
 		} else if (!rowid.equals(other.rowid))
 			return false;
 		return true;
+	}
+
+
+	/**
+	 * Returns the id of the first trade in the batch 
+	 * @return the firstTrade
+	 */
+	public int getFirstTrade() {
+		return firstTrade;
 	}
 	
 	

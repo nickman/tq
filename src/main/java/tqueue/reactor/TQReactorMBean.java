@@ -120,5 +120,36 @@ public interface TQReactorMBean {
 	 */
 	public void setPollWaitTime(final int pollWaitTime);
 	
+	/**
+	 * Returns the number of inflight batches
+	 * @return the number of inflight batches
+	 */
+	public int getInflightBatchCount();
 	
+	public int getLoopCount();
+
+	/**
+	 * Returns 
+	 * @return the lastBatchcount
+	 */
+	public int getLastBatchcount();
+
+	/**
+	 * Returns 
+	 * @return the batchCount
+	 */
+	public int getBatchCount();
+
+	/**
+	 * Returns 
+	 * @return the stubCount
+	 */
+	public int getStubCount();
+
+	/**
+	 * Returns 
+	 * @return the dropCount
+	 */
+	public int getDropCount();
+
 }

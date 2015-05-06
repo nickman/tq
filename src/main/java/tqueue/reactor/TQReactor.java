@@ -30,6 +30,7 @@ import java.lang.management.ManagementFactory;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.util.Random;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -156,7 +157,15 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
 	private int pollWaitLoops = 10;
 	/** The number of parallel streams to run per core */
-	private int streamsPerCore = 1;
+	private int streamsPerCore = 8;
+	
+	
+	private int loopCount = 0;
+	private int lastBatchcount = 0;
+	private int batchCount = 0;
+	private int stubCount = 0;
+	private int dropCount = 0;
+	
 	
 	/** Indicates if the poller config changed */
 	private final AtomicBoolean pollerConfigChanged = new AtomicBoolean(false);
@@ -181,6 +190,10 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	protected RingBufferWorkProcessor<BatchRoutingKey> ringBuffer = null;
 	
 	protected final AtomicInteger pollerBarrier = new AtomicInteger(0);
+	
+	/** Random generator to throw exceptions */
+	protected final Random random = new Random(System.currentTimeMillis());
+	
 	
 	
 	
@@ -456,14 +469,32 @@ ORA-06512: at line 1
 
 	public void process(final BatchRoutingKey batch) {
 		final int tcount = batch.getTcount();
-		log.info("[" + Thread.currentThread() + "] Processing [" + tcount + "] Trades");
+//		log.info("[" + Thread.currentThread().getName() + "] Processing [" + tcount + "] Trades");
 		tradesPerSec.mark(tcount);
 		batchesPerSec.mark();
 		avgBatchSize.update(tcount);
 
 		processBatch(batch);
-		inFlight.decrementAndGet();		
+		inFlight.decrementAndGet();
+		startId.set(batch.getFirstTrade());
 	}
+	
+	public void onException(final Throwable err) {
+		TQException tqe = null;
+		if(err instanceof TQException) {
+			tqe = (TQException)err;
+		} else if(err.getCause() != null && (err.getCause() instanceof TQException)) {
+				tqe = (TQException)err.getCause();			
+		} else {
+			log.error("Unknown TQ processing exception", err);
+			return;
+		}
+		final BatchRoutingKey brk = tqe.getBatch();
+		System.err.println("Exception on batch key [" + brk + "]:" + tqe);
+		//err.printStackTrace(System.err);
+		// FIXME:  Need to reset the poller
+	}
+	
 	
 	
 	
@@ -490,16 +521,19 @@ ORA-06512: at line 1
 		final int totalStreams = CORES * streamsPerCore;
 		final int ringBufferSize = findNextPositivePowerOfTwo(totalStreams);
 		log.info("\n\t=====================================\n\tRingBuffer Slots:" + ringBufferSize + "\n\t=====================================");
-		tpe = new ThreadPoolExecutor(CORES * 4, CORES * 4, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
+		tpe = new ThreadPoolExecutor(2, 12, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
 		tpe.prestartAllCoreThreads();
 		ringBuffer = RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());
 		
 		ctx = Streams.wrap(ringBuffer)
-			.groupBy(brk -> brk.getAccountId() % totalStreams)
-			.dispatchOn(Environment.get(), Environment.newDispatcher("tqprocessor", 1, 1, DispatcherType.RING_BUFFER))
+			.groupBy(brk -> brk.getAccountId() % totalStreams)			
 			.observe(sg -> sg.observe(brk -> inFlight.incrementAndGet()))
-			.consume(str -> 
-				str.consume(brk -> process(brk))
+			.consume(groupedStream -> 
+				groupedStream.consumeOn(
+						Environment.newDispatcher("tqprocessor", 1, 1, DispatcherType.RING_BUFFER),
+						brk -> process(brk),
+						t -> onException(t)
+				)
 			);
 		
 //	final Map<Integer, Consumer<BatchRoutingKey>> groupConsumers = new HashMap<Integer, Consumer<BatchRoutingKey>>(totalStreams);
@@ -547,7 +581,7 @@ ORA-06512: at line 1
 	 */
 	@Override
 	public void run() {
-		int loopCount = 0;
+		
 		while(started.get()) {
 			if(pollerBarrier.get() > 0) {
 				log.info("Waiting on poller barrier...");
@@ -576,15 +610,13 @@ ORA-06512: at line 1
 				pollerPs.setInt(4, pollWaitTime);			
 				
 				pollerRset = (OracleResultSet)pollerPs.executeQuery();
-				if(loopCount>0) {
-					log.info("========================================== Loop:" + loopCount);
-				}
 
 				
 				pollerRset.setFetchSize(maxBatchSize);
 				int batchCount = 0;
 				int stubCount = 0;
 				int dropCount = 0;
+				int rsetLoops = 0;
 				while(pollerRset.next()) {
 					if(!started.get()) {
 						break;
@@ -594,6 +626,7 @@ ORA-06512: at line 1
 						//log.info("Timed out waiting for results");
 						break;
 					}
+					rsetLoops++;
 					
 					// ===========================================================================
 					//   FUNCTION LOCKBATCHREF(batch IN OUT TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2 IS 
@@ -610,24 +643,28 @@ ORA-06512: at line 1
 					final String rowid = pollerCs.getString(1);
 					final int accountId = pollerCs.getInt(3);
 					final int tcount = pollerCs.getInt(4);
+					 
 					if(rowid==null) {
 						continue;
 					}
 					stubCount += tcount;
 					TQBATCH postBatch = (TQBATCH)pollerCs.getORAData(2, tqBatchOraDataFactory);
-					this.startId.set(postBatch.getFirstT());
+					final int firstTrade = postBatch.getFirstT();					
 					batchCount++;
 					pollerConnection.commit();
 					avgRingBufferCap.update(ringBuffer.getAvailableCapacity());
 					final long start = System.currentTimeMillis();
-					ringBuffer.onNext(new BatchRoutingKey(rowid, accountId, tcount));					
+					ringBuffer.onNext(new BatchRoutingKey(rowid, accountId, tcount, firstTrade));					
 					final long elapsed = System.currentTimeMillis() - start;
 					pollerBarrier.incrementAndGet();
 					avgBackPressureTime.update(elapsed);
 					inFlight.incrementAndGet();
-					
-					//sink.onNext(postBatch);
+									
+				}  //  end of result set loop
+				if(loopCount>0 && rsetLoops > 0) {
+					log.info("========================================== Loop:" + loopCount + ", Batches:" + rsetLoops);
 				}
+
 				loopCount++;
 				pollerRset.close();
 				if(batchCount>0 | dropCount>0) {
@@ -659,8 +696,11 @@ ORA-06512: at line 1
 				log.error("getTQStubs failed", sex);				
 			} catch (Exception ex) {
 				log.error("getTQStubs failed", ex);
-			}			
-		}
+			}	finally {
+				loopCount = 0;
+				lastBatchcount = 0;
+			}
+		}  // end of polling loop
 		log.info("TQReactor::TQPoller Polling Thread Ended");
 		pollerThread = null;
 	}
@@ -722,7 +762,11 @@ ORA-06512: at line 1
 			final long startTime = System.currentTimeMillis();
 			conn = ConnectionPool.getInstance().getConnection();
 			oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);
-
+			final int errCond = Math.abs(random.nextInt(20));
+			// This means reset the poller and reprocess
+			if(errCond == 7) throw new RecoverableTQException(batchKey, "Yikes. A recoverable error.");
+			// This means mark the trades as failed
+			if(errCond == 9) throw new UnrecoverableTQException(batchKey, "Yikes!! An unrecoverable error.");
 			// "DELETE FROM TQBATCHES T WHERE ROWID = CHARTOROWID(?) RETURNING VALUE(T) INTO ?";
 			ps = (OraclePreparedStatement)oraConn.prepareStatement(DEREF_BATCH_KEY_SQL);
 			ps.setString(1, batchKey.getRowid());
@@ -938,6 +982,51 @@ ORA-06512: at line 1
 		if(pollWaitTime < 0) throw new IllegalArgumentException("Invalid wait time:" + pollWaitTime);
 		pollerConfigChanged.set(pollWaitTime != this.pollWaitTime);
 		this.pollWaitTime = pollWaitTime;
+	}
+
+	@Override
+	public int getInflightBatchCount() {		
+		return inFlight.get();
+	}
+
+	/**
+	 * Returns 
+	 * @return the loopCount
+	 */
+	public int getLoopCount() {
+		return loopCount;
+	}
+
+	/**
+	 * Returns 
+	 * @return the lastBatchcount
+	 */
+	public int getLastBatchcount() {
+		return lastBatchcount;
+	}
+
+	/**
+	 * Returns 
+	 * @return the batchCount
+	 */
+	public int getBatchCount() {
+		return batchCount;
+	}
+
+	/**
+	 * Returns 
+	 * @return the stubCount
+	 */
+	public int getStubCount() {
+		return stubCount;
+	}
+
+	/**
+	 * Returns 
+	 * @return the dropCount
+	 */
+	public int getDropCount() {
+		return dropCount;
 	}
 	
 	

@@ -112,14 +112,14 @@ public class ConnectionPool {
 		//config.setJdbcUrl("jdbc:oracle:thin:@//leopard:1521/XE");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
 		config.setMetricRegistry(registry);
-		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
+		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
 		config.setUsername("tqreactor");
 		config.setPassword("tq");
 		config.addDataSourceProperty("cachePrepStmts", "true");
 		config.addDataSourceProperty("prepStmtCacheSize", "250");
 		config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-		config.setMaximumPoolSize(50);
-		config.setMinimumIdle(10);
+		config.setMaximumPoolSize(100);
+		config.setMinimumIdle(20);
 		config.setConnectionTestQuery("SELECT SYSDATE FROM DUAL");
 		config.setConnectionTimeout(1002);
 		config.setAutoCommit(false);
