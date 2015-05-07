@@ -20,11 +20,13 @@
 		<jmx-optional.version>1.0-b02-SNAPSHOT</jmx-optional.version>
 		<high-scale-lib.version>1.1.4</high-scale-lib.version>
 		<log4j.version>1.2.16</log4j.version>
+    <logback-core.version>1.0.13</logback-core.version>
+    <logback-classic.version>1.0.13</logback-classic.version>
 		<hikari.version>2.3.6</hikari.version>
 		<metrics.version>4.0.0-SNAPSHOT</metrics.version>
 		<reactor.version>2.0.0.RELEASE</reactor.version>
 		<slf4j.version>1.7.7</slf4j.version>
-		<hawtio.version>1.4.50</hawtio.version>
+		<hawtio.version>1.4.19</hawtio.version>
 		<!-- Plugin Versions -->
 		<jar-plugin.version>2.3</jar-plugin.version>
 		<source-plugin.version>2.2</source-plugin.version>
@@ -53,6 +55,18 @@
 			<version>${junit.version}</version>
 		</dependency>
 		
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-core</artifactId>
+      <version>${logback-core.version}</version>
+    </dependency>        
+        
+
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>${logback-classic.version}</version>
+    </dependency>        
 		
 		<dependency>
 		  <groupId>io.hawt</groupId>

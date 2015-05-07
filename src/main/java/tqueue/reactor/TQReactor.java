@@ -39,15 +39,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import oracle.jdbc.OracleCallableStatement;
 import oracle.jdbc.OracleConnection;
 import oracle.jdbc.OraclePreparedStatement;
 import oracle.jdbc.OracleResultSet;
 import oracle.sql.ORADataFactory;
-
-import org.apache.log4j.BasicConfigurator;
-import org.apache.log4j.Logger;
-
 import reactor.Environment;
 import reactor.core.config.DispatcherType;
 import reactor.core.dispatch.wait.ParkWaitStrategy;
@@ -78,6 +77,8 @@ import com.codahale.metrics.MetricRegistry;
  * <p>Company: Helios Development Group LLC</p>
  * @author Whitehead (nwhitehead AT heliosdev DOT org)
  * <p><code>tqueue.reactor.TQReactor</code></p>
+ * TODO:
+ * Delete batch refs on start 
  */
 
 public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
@@ -124,7 +125,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 
 	
 	/** Static class logger */
-	private final Logger log = Logger.getLogger(getClass());
+	private final Logger log = LoggerFactory.getLogger(getClass());
 	
 	/** The connection pool */
 	private final ConnectionPool connPool;
@@ -217,6 +218,8 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	private final AtomicInteger recovErrs = new AtomicInteger(0);
 	/** Unrecoverable exception count */
 	private final AtomicInteger unrecovErrs = new AtomicInteger(0);
+	/** Batch in process concurrency */
+	private final AtomicInteger batchProcessingConcurrency = new AtomicInteger(0);
 	
 
 	/** A meter of trades per/s */
@@ -264,11 +267,14 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 		return instance;
 	}
 	
-	protected static final String HAWT_WAR = "/home/nwhitehead/.m2/repository/io/hawt/hawtio-web/1.4.50/hawtio-web-1.4.50.war";
-	protected static final String WIN_HAWT_WAR = "c:\\users\\nwhitehe\\.m2\\repository\\io\\hawt\\hawtio-web\\1.4.50\\hawtio-web-1.4.50.war";
+	protected static final String HAWT_WAR = "/home/nwhitehead/.m2/repository/io/hawt/hawtio-web/1.4.19/hawtio-web-1.4.19.war";
+	protected static final String WIN_HAWT_WAR = "c:\\users\\nwhitehe\\.m2\\repository\\io\\hawt\\hawtio-web\\1.4.19\\hawtio-web-1.4.19.war";
 
 	
 	public static void main(String[] args) {
+		
+		final Logger logx = LoggerFactory.getLogger(TQReactor.class);
+		
 		final io.hawt.embedded.Main main = new io.hawt.embedded.Main();
 		main.setWar(ISWIN ? WIN_HAWT_WAR : HAWT_WAR);
 		main.setPort(9090);
@@ -285,7 +291,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 		};
 		bootThread.start();
 		
-		BasicConfigurator.configure();
+//		BasicConfigurator.configure();
 		TQReactor tqr = TQReactor.getInstance();
 		tqr.log.info("TQReactor Test");
 		try {
@@ -505,14 +511,16 @@ ORA-06512: at line 1
 
 	public void process(final BatchRoutingKey batch) {
 		final int tcount = batch.getTcount();
-//		log.info("[" + Thread.currentThread().getName() + "] Processing [" + tcount + "] Trades");
+//		log.info("[" + Thread.currentThread().getName() + "] Processing [" + tcount + "] Trades for [" + batch.getAccountId() + "]");
 		tradesPerSec.mark(tcount);
 		batchesPerSec.mark();
 		avgBatchSize.update(tcount);
 
 		processBatch(batch);
+		
 		inFlight.decrementAndGet();
 		nextPollId.update(batch.getFirstTrade());
+		batchProcessingConcurrency.decrementAndGet();
 	}
 	
 	public void onException(final Throwable err) {
@@ -541,6 +549,7 @@ ORA-06512: at line 1
 				// trades are not recoverable. Save them in a FAILED state
 				failBatch(brk, tqe);
 			}
+			batchProcessingConcurrency.decrementAndGet();
 		//err.printStackTrace(System.err);
 		// FIXME:  Need to reset the poller
 	}
@@ -581,10 +590,14 @@ ORA-06512: at line 1
 			.groupBy(brk -> brk.getAccountId() % totalStreams)			
 			.observe(sg -> sg.observe(brk -> inFlight.incrementAndGet()))
 			.consume(groupedStream -> 
-				groupedStream.consumeOn(
-						Environment.newDispatcher("tqprocessor", 1, 1, DispatcherType.RING_BUFFER),
-						brk -> process(brk),
-						t -> onException(t)
+				groupedStream
+					.dispatchOn(Environment.get(), Environment.newDispatcher("tqprocessor", 1, 1, DispatcherType.RING_BUFFER))
+					.consume(						
+						brk -> {
+							batchProcessingConcurrency.incrementAndGet();
+							process(brk);
+						},
+						t -> onException(t)						
 				)
 			);
 		
@@ -667,17 +680,19 @@ ORA-06512: at line 1
 	public void run() {
 		
 		while(started.get()) {
-			if(inFlight.get() > 0) {
-				log.info("Waiting on poller barrier. Last Start ID: [" + nextPollId.get() + "]");
+			if(inFlight.get() > 0) {				
 				final long start = System.currentTimeMillis(); 
 				while(inFlight.get() > 0) {
 					if(resetFlag.get()) break;
+					if(System.currentTimeMillis() > (start + 10000)) {
+						log.info("Polling Barrier Wait has waited for 10s.");
+					}
 					Thread.yield();
 				}
 				resetFlag.set(false);
 				final long elapsed = System.currentTimeMillis()-start;
-				pollingWaitTimeMs.update(elapsed);
-				//log.info("Waited on poller barrier for [" + elapsed + "] ns. / [" + TimeUnit.MILLISECONDS.convert(elapsed, TimeUnit.NANOSECONDS) + "] ms.");
+				pollingWaitTimeMs.update(elapsed);				
+				log.info("Waited on poller barrier. Wait: [{}] ms. Conc: [{}], Start ID: [{}]", new Object[]{ elapsed, batchProcessingConcurrency.get(), nextPollId.get()});
 			}
 			try {
 				/*
@@ -770,18 +785,18 @@ ORA-06512: at line 1
 				loopCount++;
 				pollerRset.close();
 				if(batchCount>0 | dropCount>0) {
-				log.info(new StringBuilder("Polling loop: batches:")
-					.append(batchCount)
-					.append(", stubs:")
-					.append(stubCount)
-					.append(", drops:")
-					.append(dropCount)
-					.append(", cap:")
-					.append(ringBuffer.getAvailableCapacity())					
-					.append(", inFlight:")
-					.append(inFlight.get())					
-					
-				);
+					log.info(new StringBuilder("Polling loop: batches:")
+						.append(batchCount)
+						.append(", stubs:")
+						.append(stubCount)
+						.append(", drops:")
+						.append(dropCount)
+						.append(", cap:")
+						.append(ringBuffer.getAvailableCapacity())					
+						.append(", inFlight:")
+						.append(inFlight.get())
+						.toString()					
+					);
 				}
 				batchCount = 0;
 				stubCount = 0;
@@ -950,7 +965,7 @@ ORA-06512: at line 1
 		} catch (Exception ex) {
 //			log.error("Failed to process batch", ex);
 			//throw new RuntimeException("Failed to process batch [" + postBatch + "]", ex);
-			log.fatal("\n\t=====================================================================\n\t!!!!!!!!!!!!!!!!\n\tFAILED TO SAVE FAILED BATCH\n\t!!!!!!!!!!!!!!!\n\t=====================================================================\n", ex);
+			log.error("\n\t=====================================================================\n\t!!!!!!!!!!!!!!!!\n\tFAILED TO SAVE FAILED BATCH\n\t!!!!!!!!!!!!!!!\n\t=====================================================================\n", ex);
 		} finally {
 			inFlight.decrementAndGet();
 			if(rs!=null) try { rs.close(); } catch (Exception x) {/* No Op */}
@@ -994,7 +1009,7 @@ ORA-06512: at line 1
 			final long startTime = System.currentTimeMillis();
 			conn = ConnectionPool.getInstance().getConnection();
 			oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);
-			final int errCond = Math.abs(random.nextInt(100));
+//			final int errCond = Math.abs(random.nextInt(100));
 			// This means reset the poller and reprocess
 //			if(errCond == 7) throw new RecoverableTQException(batchKey, "Yikes. A recoverable error.");
 			// This means mark the trades as failed
@@ -1284,6 +1299,14 @@ ORA-06512: at line 1
 	 */
 	public int getNextPollerStart() {
 		return nextPollId.get();
+	}
+
+	/**
+	 * Returns the current total number of threads processing batches
+	 * @return the current total number of threads processing batches
+	 */
+	public int getBatchProcessingConcurrency() {
+		return batchProcessingConcurrency.get();
 	}
 	
 	

@@ -24,8 +24,6 @@
  */
 package tqueue.reactor;
 
-import java.util.concurrent.atomic.AtomicInteger;
-
 import javax.management.ObjectName;
 
 import tqueue.helpers.JMXHelper;
@@ -176,4 +174,9 @@ public interface TQReactorMBean {
 	
 	public void reset(int nextId);
 
+	/**
+	 * Returns the current total number of threads processing batches
+	 * @return the current total number of threads processing batches
+	 */
+	public int getBatchProcessingConcurrency();
 }

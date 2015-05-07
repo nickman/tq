@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration debug="false" scan="false">  
+  <jmxConfigurator/>  
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>
+        %d{ISO8601} %-5level [%thread] %logger{0}: %msg%n
+      </pattern>
+    </encoder>
+  </appender>
+  <appender name="CYCLIC" class="ch.qos.logback.core.read.CyclicBufferAppender">
+    <MaxSize>1024</MaxSize>
+  </appender>
+
+
+  <logger name="tqueue" level="INFO"/>
+  
+  
+
+  
+  <root level="info">
+    <appender-ref ref="STDOUT"/>    
+  </root>
+</configuration>

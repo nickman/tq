@@ -1,0 +1,87 @@
+{
+  "title": "TQ",
+  "group": "Personal",
+  "widgets": [
+    {
+      "id": "w1",
+      "title": "TQ Poller",
+      "row": 1,
+      "col": 1,
+      "size_x": 4,
+      "size_y": 1,
+      "path": "jmx/charts",
+      "include": "app/jmx/html/charts.html",
+      "search": {
+        "href": "",
+        "nid": "root-tqueue-TQReactor",
+        "att": "InflightBatchCount%2CPollWaitTime"
+      },
+      "hash": ""
+    },
+    {
+      "id": "w2",
+      "title": "BackPressure Time (ms)",
+      "row": 2,
+      "col": 1,
+      "size_x": 4,
+      "size_y": 1,
+      "path": "jmx/charts",
+      "include": "app/jmx/html/charts.html",
+      "search": {
+        "href": "",
+        "nid": "root-metrics-avgBackPressureTime",
+        "att": "Mean"
+      },
+      "hash": ""
+    },
+    {
+      "id": "w3",
+      "title": "Trades/sec",
+      "row": 1,
+      "col": 5,
+      "size_x": 4,
+      "size_y": 2,
+      "path": "jmx/charts",
+      "include": "app/jmx/html/charts.html",
+      "search": {
+        "size": "%7B%22size_x%22%3A4%2C%22size_y%22%3A3%7D",
+        "nid": "root-metrics-tradesPerSec",
+        "att": "FifteenMinuteRate%2CFiveMinuteRate%2CMeanRate%2COneMinuteRate"
+      },
+      "hash": ""
+    },
+    {
+      "id": "w4",
+      "title": "Polling Exec",
+      "row": 3,
+      "col": 1,
+      "size_x": 4,
+      "size_y": 2,
+      "path": "jmx/charts",
+      "include": "app/jmx/html/charts.html",
+      "search": {
+        "size": "%7B%22size_x%22%3A4%2C%22size_y%22%3A3%7D",
+        "nid": "root-metrics-pollingExecTimeMs",
+        "att": "Mean"
+      },
+      "hash": ""
+    },
+    {
+      "id": "w5",
+      "title": "Polling Wait Time",
+      "row": 3,
+      "col": 5,
+      "size_x": 4,
+      "size_y": 2,
+      "path": "jmx/charts",
+      "include": "app/jmx/html/charts.html",
+      "search": {
+        "size": "%7B%22size_x%22%3A4%2C%22size_y%22%3A3%7D",
+        "nid": "root-metrics-pollingWaitTimeMs",
+        "att": "Mean"
+      },
+      "hash": ""
+    }
+  ],
+  "id": "51571480e9fae1240d"
+}
