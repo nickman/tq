@@ -282,13 +282,14 @@ create or replace PACKAGE BODY TQV AS
       batchy TQBATCH;
       latency NUMBER  := 0;
       pipedRows PLS_INTEGER := 0;      
+      waitCount NUMBER := 0;
       events NUMBER := 0;
       cursor qx is SELECT VALUE(T) FROM TABLE (
           TQV.TRADEBATCH(
             TQV.TOTQSTUB(CURSOR(SELECT * FROM TABLE(
             TQV.FINDSTUBS(
               CURSOR (                
-                SELECT ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
+                SELECT /*+ FIRST_ROWS(1000) */ ROWIDTOCHAR(ROWID) XROWID, TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, BATCH_ID, BATCH_TS  FROM TQSTUBS
                 WHERE TQUEUE_ID > STARTING_ID
                 AND BATCH_ID < 1
                 AND BATCH_TS IS NULL
@@ -299,6 +300,7 @@ create or replace PACKAGE BODY TQV AS
           , MAX_BATCH_SIZE)  -- Max number of trades in a batch
         ) T;
     BEGIN
+      LOGEVENT('QB: st:' || STARTING_ID);
       WHILE(1 = 1) LOOP
         open qx;
           LOOP
@@ -308,15 +310,27 @@ create or replace PACKAGE BODY TQV AS
             pipedRows := pipedRows + 1;
           END LOOP;
         close qx;
-        IF WAIT_TIME < 1 THEN
+        LOGEVENT('QB: wt:' || WAIT_TIME || ', init rows:' || pipedRows);
+        IF WAIT_TIME < 1 OR pipedRows > 0 THEN
+          LOGEVENT('QB: ret1');
           RETURN;
         END IF;        
+        IF waitCount = 1 THEN
+          LOGEVENT('QB: ret2');
+          RETURN;
+        END IF;
+        waitCount := waitCount +1;
+        LOGEVENT('QB: wait:' || WAIT_TIME);
         events := WAITONSIGNAL(WAIT_TIME);
+        LOGEVENT('QB: wait ret:' || events);
         IF events = -1 THEN
+          LOGEVENT('QB: ret3');
           RETURN;   -- We timed out
         END IF;
+        LOGEVENT('QB: continuing');
         CONTINUE;
       END LOOP;
+      LOGEVENT('QB: ret3');
     RETURN;
 
   END QUERYTBATCHES;
@@ -456,10 +470,11 @@ create or replace PACKAGE BODY TQV AS
     --======================================================================================================
     --======================================================================================================
 
-  FUNCTION LOCKBATCHREF(batch IN OUT NOCOPY TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2 IS
+  PROCEDURE LOCKBATCHREF(batch IN TQBATCH, accountId OUT INT, tcount OUT INT, firstTrade OUT INT, xrowid OUT VARCHAR2) IS
     srowid VARCHAR2(200);
     lockedStubs TQSTUB_ARR;
     now TIMESTAMP := SYSTIMESTAMP;
+    newBatch TQBATCH;
 
   BEGIN
     SELECT TQSTUB(
@@ -478,17 +493,19 @@ create or replace PACKAGE BODY TQV AS
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
     ) FOR UPDATE OF BATCH_ID, BATCH_TS SKIP LOCKED;
 
-
-    UPDATE_STUBS(lockedStubs, batch);
+    newBatch := new TQBATCH( batch.ACCOUNT, batch.TCOUNT, batch.FIRST_T, batch.LAST_T, batch.BATCH_ID, batch.ROWIDS, batch.STUBS);
+    UPDATE_STUBS(lockedStubs, newBatch);
     IF(CS(lockedStubs) > 0 ) THEN
-      INSERT INTO TQBATCHES VALUES(batch) RETURNING ROWIDTOCHAR(ROWID) INTO srowid;      
-      accountId := batch.ACCOUNT;
-      tcount := batch.STUBS.COUNT;
-      RETURN srowid;    
+      INSERT INTO TQBATCHES VALUES(newBatch) RETURNING ROWIDTOCHAR(ROWID) INTO srowid;      
+      accountId := newBatch.ACCOUNT;
+      tcount := newBatch.STUBS.COUNT;
+      firstTrade := newBatch.FIRST_T;
+      xrowid := srowid;    
     ELSE
       accountId := -1;
       tcount := 0;
-      RETURN null;          
+      firstTrade := null;
+      xrowid := null;
     END IF;
 
   END LOCKBATCHREF;
@@ -753,7 +770,7 @@ create or replace PACKAGE BODY TQV AS
 
   FUNCTION HANDLE_INSERT(txid IN RAW) RETURN NUMBER IS
   BEGIN
-    INSERT INTO TQSTUBS (TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID, BATCH_ID)
+    INSERT /*+ APPEND */ INTO TQSTUBS (TQROWID,TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID, BATCH_ID)
       SELECT ROWIDTOCHAR(T.ROWID), T.TQUEUE_ID, txid, S.SECURITY_ID, S.SECURITY_TYPE, A.ACCOUNT_ID, -1
       FROM TQUEUE T, ACCOUNT A, SECURITY S
       WHERE T.ACCOUNT_DISPLAY_NAME = A.ACCOUNT_DISPLAY_NAME

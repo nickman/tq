@@ -14,9 +14,7 @@
 
 
   <logger name="tqueue" level="INFO"/>
-  
-  
-
+  <logger name="com.zaxxer" level="WARN"/>
   
   <root level="info">
     <appender-ref ref="STDOUT"/>    

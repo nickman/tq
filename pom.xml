@@ -20,8 +20,8 @@
 		<jmx-optional.version>1.0-b02-SNAPSHOT</jmx-optional.version>
 		<high-scale-lib.version>1.1.4</high-scale-lib.version>
 		<log4j.version>1.2.16</log4j.version>
-    <logback-core.version>1.0.13</logback-core.version>
-    <logback-classic.version>1.0.13</logback-classic.version>
+    	<logback-core.version>1.0.13</logback-core.version>
+    	<logback-classic.version>1.0.13</logback-classic.version>
 		<hikari.version>2.3.6</hikari.version>
 		<metrics.version>4.0.0-SNAPSHOT</metrics.version>
 		<reactor.version>2.0.0.RELEASE</reactor.version>
@@ -72,6 +72,12 @@
 		  <groupId>io.hawt</groupId>
 		  <artifactId>hawtio-embedded</artifactId>
 		  <version>${hawtio.version}</version>
+		  <exclusions>
+		  	<exclusion>
+          		<groupId>org.slf4j</groupId>
+          		<artifactId>slf4j-simple</artifactId>
+        	</exclusion>
+		  </exclusions>
 		</dependency>
 		
 		<dependency>
@@ -102,17 +108,20 @@
 			<version>${reactor.version}</version>
 		</dependency>
 
+		<!-- 
 		<dependency>
 			<groupId>log4j</groupId>
 			<artifactId>log4j</artifactId>
 			<version>${log4j.version}</version>
 		</dependency>
 
+		
 		<dependency>
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-log4j12</artifactId>
 			<version>${slf4j.version}</version>
 		</dependency>
+		-->
 
 
 
@@ -165,6 +174,7 @@
 			<artifactId>maven-eclipse-plugin</artifactId>
 			<version>${eclipse-plugin.version}</version>
 			<configuration>
+				<lineLength>120</lineLength>
 			    <downloadJavadocs>true</downloadJavadocs>
 			    <downloadSources>true</downloadSources>
 			    <classpathContainers>
@@ -180,8 +190,8 @@
 				<artifactId>maven-compiler-plugin</artifactId>
 				<version>2.0.2</version>
 				<configuration>
-					<source>1.7</source>
-					<target>1.7</target>
+					<source>${compiler-source.version}</source>
+					<target>${compiler-target.version}</target>
 				</configuration>
 			</plugin>
        	<plugin>

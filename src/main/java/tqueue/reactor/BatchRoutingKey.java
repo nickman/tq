@@ -39,6 +39,7 @@ public class BatchRoutingKey {
 	final int accountId;
 	final int tcount;
 	final int firstTrade;
+	final long createTime = System.currentTimeMillis();
 	
 	/**
 	 * Creates a new BatchRoutingKey
@@ -55,6 +56,21 @@ public class BatchRoutingKey {
 		this.firstTrade = firstTrade;
 	}
 	
+	/**
+	 * Returns the elapsed time since create in ms.
+	 * @return the elapsed time since create in ms.
+	 */
+	public long getElapsedSinceCreate() {
+		return System.currentTimeMillis() - createTime;
+	}
+	
+	/**
+	 * Returns the create time in ms.
+	 * @return the create time in ms.
+	 */
+	public long getCreateTime() {
+		return createTime;
+	}
 	
 	/**
 	 * Returns 
@@ -83,13 +99,14 @@ public class BatchRoutingKey {
 	 */
 	@Override
 	public String toString() {
-		StringBuilder builder = new StringBuilder();
-		builder.append("BatchRoutingKey [accountId=");
-		builder.append(accountId);
-		builder.append(", tcount=");
-		builder.append(tcount);
-		builder.append("]");
-		return builder.toString();
+		return new StringBuilder()
+		.append("BatchRoutingKey [accountId=")
+		.append(accountId)
+		.append(", tcount=")
+		.append(tcount)
+		.append(", elapsed=")
+		.append(getElapsedSinceCreate())		
+		.append("]").toString();
 	}
 	/**
 	 * {@inheritDoc}

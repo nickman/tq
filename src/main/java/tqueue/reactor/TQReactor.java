@@ -100,7 +100,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	
 	/** The initial lock batch SQL */	
 	public static final String LOCK_BATCH_SQL =
-			"BEGIN ? := TQV.LOCKBATCHREF(?, ?, ?); END;";
+			"BEGIN TQV.LOCKBATCHREF(?, ?, ?, ?, ?); END;";
 	
 	/** The processing started lock batch SQL */
 	public static final String RELOCK_BATCH_SQL = 
@@ -124,7 +124,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 			"BEGIN TQV.FINISHBATCH(?); END;";
 
 	
-	/** Static class logger */
+	/** Instance logger */
 	private final Logger log = LoggerFactory.getLogger(getClass());
 	
 	/** The connection pool */
@@ -152,7 +152,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The ID of the last trade batched and retrieved */
 	private int lastTradeQueueId = 0;
 	/** The poller's maximum number of trades to retrieve in one loop */
-	private int maxRows = 10000;
+	private int maxRows = 20000;
 	/** The poller's maximum batch size */
 	private int maxBatchSize = 1000;
 	/** The poller's wait period in seconds when waiting for the next rows to become available */
@@ -160,7 +160,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
 	private int pollWaitLoops = 10;
 	/** The number of parallel streams to run per core */
-	private int streamsPerCore = 2;
+	private int streamsPerCore = 4;
 	
 	
 	private int loopCount = 0;
@@ -189,8 +189,8 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The thread pool for the ring buffer */
 	protected ThreadPoolExecutor tpe = null;
 	
-	/** The ring buffer */
-	protected RingBufferWorkProcessor<BatchRoutingKey> ringBuffer = null;
+	/** The ring buffer processor */
+	protected Broadcaster<BatchRoutingKey> ringBuffer = null;
 	
 	/** Flag indicating the poller has been reset */
 	protected final AtomicBoolean resetFlag = new AtomicBoolean(false);
@@ -226,6 +226,9 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	private final Meter tradesPerSec;
 	/** A meter of batches per/s */
 	private final Meter batchesPerSec;
+	/** A meter of loop read batches */
+	private final Meter readBatchesPerSec;
+	
 	/** A histogram of batch sizes (trades per batch) */
 	private final Histogram avgBatchSize;
 	/** A histogram of batch processing times */
@@ -240,6 +243,15 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	private final Histogram pollingWaitTimeMs;
 	/** A meter of polling stored proc invocation time in ms */
 	private final Histogram pollingExecTimeMs;
+	/** A histogram of times to first result in the poller query in ms */
+	private final Histogram timeToFirstResultSetMs;
+	/** A histogram of times to the next result in the poller query in ms */
+	private final Histogram timeToNextResultSetMs;
+	/** A histogram of the number of rows retrieved in each poller query */
+	private final Histogram resultSetCount;
+	
+	/** The number of rows retrieved during the current result set iteration */
+	private int rowCount = 0;
 	
 	/** A histogram of concurrent inflight batches */
 	private final Histogram inFlightMetric;
@@ -395,6 +407,10 @@ ORA-06512: at line 1
 		avgRingBufferCap = registry.histogram("avgRingBufferCap");
 		pollingWaitTimeMs = registry.histogram("pollingWaitTimeMs");
 		pollingExecTimeMs = registry.histogram("pollingExecTimeMs");
+		readBatchesPerSec = registry.meter("readBatchesPerSec"); 
+		timeToFirstResultSetMs = registry.histogram("timeToFirstResultSetMs");
+		timeToNextResultSetMs = registry.histogram("timeToNextResultSetMs");
+		resultSetCount = registry.histogram("resultSetCount");
 		
 		JMXHelper.registerMBean(this, OBJECT_NAME);
 		
@@ -579,19 +595,23 @@ ORA-06512: at line 1
 	 * Initializes the TQBatch broadcaster
 	 */
 	protected void initSink() {
-		final int totalStreams = CORES * streamsPerCore;
+//		final int totalStreams = CORES * streamsPerCore;
+//		final int totalStreams = CORES;
+//		final int totalStreams = 4;
+		final int totalStreams = 6;
 		final int ringBufferSize = findNextPositivePowerOfTwo(totalStreams);
 		log.info("\n\t=====================================\n\tRingBuffer Slots:" + ringBufferSize + "\n\t=====================================");
-		tpe = new ThreadPoolExecutor(2, 12, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
-		tpe.prestartAllCoreThreads();
-		ringBuffer = RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());
+		tpe = new ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
+//		tpe.prestartAllCoreThreads();
+		ringBuffer = Broadcaster.create(); 
+				//RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());
 		
 		ctx = Streams.wrap(ringBuffer)
 			.groupBy(brk -> brk.getAccountId() % totalStreams)			
 			.observe(sg -> sg.observe(brk -> inFlight.incrementAndGet()))
 			.consume(groupedStream -> 
 				groupedStream
-					.dispatchOn(Environment.get(), Environment.newDispatcher("tqprocessor", 1, 1, DispatcherType.RING_BUFFER))
+					.dispatchOn(Environment.get(), Environment.newDispatcher("tqprocessor", 16, 1, DispatcherType.RING_BUFFER))
 					.consume(						
 						brk -> {
 							batchProcessingConcurrency.incrementAndGet();
@@ -681,18 +701,20 @@ ORA-06512: at line 1
 		
 		while(started.get()) {
 			if(inFlight.get() > 0) {				
-				final long start = System.currentTimeMillis(); 
-				while(inFlight.get() > 0) {
-					if(resetFlag.get()) break;
-					if(System.currentTimeMillis() > (start + 10000)) {
-						log.info("Polling Barrier Wait has waited for 10s.");
-					}
-					Thread.yield();
-				}
+				final long start = System.currentTimeMillis();
+				long wt = start;
+//				while(inFlight.get() > 0) {
+//					if(resetFlag.get()) break;
+//					if(System.currentTimeMillis() > (wt + 10000)) {
+//						log.warn("Polling Barrier Wait has waited for 10s.");
+//						wt = System.currentTimeMillis();
+//					}
+//					Thread.yield();
+//				}
 				resetFlag.set(false);
-				final long elapsed = System.currentTimeMillis()-start;
-				pollingWaitTimeMs.update(elapsed);				
-				log.info("Waited on poller barrier. Wait: [{}] ms. Conc: [{}], Start ID: [{}]", new Object[]{ elapsed, batchProcessingConcurrency.get(), nextPollId.get()});
+//				final long elapsed = System.currentTimeMillis()-start;
+//				pollingWaitTimeMs.update(elapsed);				
+//				log.info("Waited on poller barrier. Wait: [{}] ms. Conc: [{}], Start ID: [{}]", new Object[]{ elapsed, batchProcessingConcurrency.get(), nextPollId.get()});
 			}
 			try {
 				/*
@@ -716,6 +738,7 @@ ORA-06512: at line 1
 				final long execStart = System.currentTimeMillis();
 				try {
 					pollerRset = (OracleResultSet)pollerPs.executeQuery();
+					rowCount = 0;
 					pollingExecTimeMs.update(System.currentTimeMillis() - execStart);
 				} catch (SQLTimeoutException sto) {
 					reInitPoller();
@@ -728,7 +751,15 @@ ORA-06512: at line 1
 				int stubCount = 0;
 				int dropCount = 0;
 				int rsetLoops = 0;
+				final long rsetStart = System.currentTimeMillis();
 				while(pollerRset!=null && pollerRset.next()) {
+					readBatchesPerSec.mark();
+					if(rowCount==0) {
+						timeToFirstResultSetMs.update(System.currentTimeMillis() - rsetStart);
+					} else {
+						timeToNextResultSetMs.update(System.currentTimeMillis() - rsetStart);
+					}
+					rowCount++;
 					if(!started.get() || resetFlag.get()) {
 						break;
 					}
@@ -740,15 +771,17 @@ ORA-06512: at line 1
 					rsetLoops++;
 					
 					// ===========================================================================
-					//   FUNCTION LOCKBATCHREF(batch IN OUT TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2 IS 
-					// 	 BEGIN ? := TQV.LOCKBATCHREF(?, ?, ?); END;
+					//   PROCEDURE LOCKBATCHREF(batch IN TQBATCH, accountId OUT INT, tcount OUT INT, firstTrade OUT INT, xrowid OUT VARCHAR2) IS 
+					// 	 BEGIN TQV.LOCKBATCHREF(?, ?, ?, ?, ?); END;
 					// ===========================================================================
-					pollerCs.registerOutParameter(1, DBType.VARCHAR.typeCode);
-					pollerCs.registerOutParameter(2, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);
+					
+//					pollerCs.registerOutParameter(1, TQBATCH._SQL_TYPECODE, TQBATCH._SQL_NAME);
+					pollerCs.registerOutParameter(2, DBType.INTEGER.typeCode);
 					pollerCs.registerOutParameter(3, DBType.INTEGER.typeCode);
 					pollerCs.registerOutParameter(4, DBType.INTEGER.typeCode);
+					pollerCs.registerOutParameter(5, DBType.VARCHAR.typeCode);
 				
-					pollerCs.setORAData(2, preBatch);
+					pollerCs.setORAData(1, preBatch);
 					try {
 						pollerCs.execute();
 					}  catch (SQLTimeoutException sto) {
@@ -756,31 +789,37 @@ ORA-06512: at line 1
 						continue;
 					}
 					if(resetFlag.get()) break;
-					final String rowid = pollerCs.getString(1);
-					final int accountId = pollerCs.getInt(3);
-					final int tcount = pollerCs.getInt(4);
+					final String rowid = pollerCs.getString(5);
+					final int accountId = pollerCs.getInt(2);
+					final int tcount = pollerCs.getInt(3);
+					final int firstTrade = pollerCs.getInt(4);
 					 
 					if(rowid==null) {
 						continue;
 					}
 					stubCount += tcount;
-					TQBATCH postBatch = (TQBATCH)pollerCs.getORAData(2, tqBatchOraDataFactory);
-					final int firstTrade = postBatch.getFirstT();					
+					//TQBATCH postBatch = (TQBATCH)pollerCs.getORAData(2, tqBatchOraDataFactory);
+//					final int firstTrade = postBatch.getFirstT();					
 					batchCount++;
 					pollerConnection.commit();
-					avgRingBufferCap.update(ringBuffer.getAvailableCapacity());
+//					avgRingBufferCap.update(ringBuffer.getAvailableCapacity());
 					final long start = System.currentTimeMillis();
 					if(resetFlag.get()) break;
-					ringBuffer.onNext(new BatchRoutingKey(rowid, accountId, tcount, firstTrade));					
+					final BatchRoutingKey brk = new BatchRoutingKey(rowid, accountId, tcount, firstTrade); 
+					ringBuffer.onNext(brk);	
+					//log.info("Dispatched {}", brk);
 					final long elapsed = System.currentTimeMillis() - start;
 					inFlight.incrementAndGet();
 					avgBackPressureTime.update(elapsed);
 					inFlight.incrementAndGet();
 									
 				}  //  end of result set loop
+				
 				if(loopCount>0 && rsetLoops > 0) {
-					log.info("========================================== Loop:" + loopCount + ", Batches:" + rsetLoops);
+					resultSetCount.update(rowCount);
+					log.info("========================================== Loop:" + loopCount + ", Batches:" + rsetLoops + " rowCount:" + rowCount);
 				}
+				rowCount = 0;
 
 				loopCount++;
 				pollerRset.close();
@@ -791,8 +830,8 @@ ORA-06512: at line 1
 						.append(stubCount)
 						.append(", drops:")
 						.append(dropCount)
-						.append(", cap:")
-						.append(ringBuffer.getAvailableCapacity())					
+//						.append(", cap:")
+//						.append(ringBuffer.getAvailableCapacity())					
 						.append(", inFlight:")
 						.append(inFlight.get())
 						.toString()					
@@ -1006,6 +1045,7 @@ ORA-06512: at line 1
 		TQBATCH preBatch = null;
 		TQBATCH postBatch = null;
 		try {
+			log.info("Processing {}", batchKey);
 			final long startTime = System.currentTimeMillis();
 			conn = ConnectionPool.getInstance().getConnection();
 			oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);
@@ -1024,6 +1064,8 @@ ORA-06512: at line 1
 			preBatch = (TQBATCH)rs.getORAData(1, tqBatchOraDataFactory);
 			rs.close();
 			ps.close();
+			rs = null;
+			ps = null;
 			
 			
 			//preBatch.restoreConnection(oraConn);
@@ -1041,7 +1083,7 @@ ORA-06512: at line 1
 				int dropCount = (preBatch.getTcount() - postBatch.getTcount());
 				//System.err.println("RE-Lock Drops:" + dropCount);
 			}
-			
+			cs = null;
 			//===========================================================================================
 			//		FUNCTION STARTBATCH(tqbatch IN OUT TQBATCH) RETURN TQTRADE_ARR;
 			//===========================================================================================
@@ -1062,6 +1104,7 @@ ORA-06512: at line 1
 				log.error("Mismatch between trade count [" + trades.length + "] and postBatch stub count [" + postBatch.getRowids().length() + "]. (PreBatch:[" + preBatch.getRowids().length() + "])");
 				throw new RuntimeException("Mismatch between trade count [" + trades.length + "], postBatch ROWID count [" + postBatch.getRowids().length() + "] and postBatch Stub count [" + postBatch.getStubs().length() + "]");
 			}
+			cs = null;
 			
 			
 			//===========================================================================================
@@ -1077,6 +1120,7 @@ ORA-06512: at line 1
 			cs.setInt(2, postBatch.getBatchId());
 			cs.execute();
 			cs.close();
+			cs = null;
 			
 			
 			//===========================================================================================
@@ -1087,6 +1131,10 @@ ORA-06512: at line 1
 			cs.execute();
 			cs.close();
 			conn.commit();
+			conn.close();
+			
+			cs = null;
+			conn = null;
 			inFlight.decrementAndGet();
 			//log.info("Batch Complete");
 			final long elapsedTime = System.currentTimeMillis() - startTime;

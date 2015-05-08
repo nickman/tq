@@ -37,6 +37,48 @@ Begin
 End;
 
 
+Declare
+  idx NUMBER := 0;
+  sname VARCHAR2(100);
+  csize NUMBER;
+  cursor c is select sequence_name, cache_size from user_sequences where SEQUENCE_NAME NOT LIKE '%ACCOUNT%' AND SEQUENCE_NAME NOT LIKE '%SECURITY%';
+Begin  
+/*
+  Execute Immediate 'truncate table event';
+  Execute Immediate 'truncate table tqueue';
+  Execute Immediate 'truncate table tqstubs';
+  Execute Immediate 'truncate table tqbatches';
+*/  
+/*
+  for seqInfo in c LOOP
+    EXECUTE IMMEDIATE 'DROP SEQUENCE TQREACTOR.' || c.SEQUENCE_NAME;
+    EXECUTE IMMEDIATE 'CREATE SEQUENCE ' || c.SEQUENCE_NAME || ' MINVALUE 0 MAXVALUE 2147483647 INCREMENT BY 1 START WITH 1 CACHE ' || c.cache_size || ' ORDER  NOCYCLE';
+  END LOOP;
+*/  
+  SELECT COUNT(*) INTO IDX FROM ACCOUNT;
+  IF IDX < 1000 THEN
+    TESTDATA.GENACCTS(1000-IDX);
+    COMMIT;
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'ACCOUNT', estimate_percent => 100);
+  END IF;
+  SELECT COUNT(*) INTO IDX FROM SECURITY;
+  IF IDX < 10000 THEN
+    TESTDATA.GENSECS(10000-IDX);
+    COMMIT;
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'SECURITY', estimate_percent => 100);
+  END IF;
+  COMMIT;  
+  DBMS_OUTPUT.PUT_LINE(TESTDATA.FORCELOADCACHE);
+  FOR i in 1..10 LOOP
+    FOR x in 1..100 LOOP
+      Testdata.Gentrades(100);
+      COMMIT;
+    END LOOP;
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'TQUEUE', estimate_percent => 100);
+    DBMS_LOCK.SLEEP(10);
+  END LOOP;   
+End;
+
 
 
 select 'ACCOUNTS', count(*) from account

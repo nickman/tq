@@ -51,8 +51,8 @@ import oracle.jdbc.OraclePreparedStatement;
 import oracle.jdbc.OracleResultSet;
 import oracle.sql.ARRAY;
 
-import org.apache.log4j.BasicConfigurator;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import reactor.Environment;
 import reactor.core.Dispatcher;
@@ -119,8 +119,9 @@ public class TQReactorJDBC implements Runnable, ThreadFactory {
 			"BEGIN TQV.FINISHBATCH(?); END;";
 
 	
-	/** Static class logger */
-	private final Logger log = Logger.getLogger(getClass());
+	/** Instance logger */
+	private final Logger log = LoggerFactory.getLogger(getClass());
+
 	
 	/** The connection pool */
 	private final ConnectionPool connPool;
@@ -219,7 +220,6 @@ public class TQReactorJDBC implements Runnable, ThreadFactory {
 	}
 	
 	public static void main(String[] args) {
-		BasicConfigurator.configure();
 		TQReactorJDBC tqr = TQReactorJDBC.getInstance();
 		tqr.log.info("TQReactor Test");
 		try {
@@ -517,7 +517,7 @@ public class TQReactorJDBC implements Runnable, ThreadFactory {
 					.append(dropCount)
 					.append(", inFlight:")
 					.append(inFlight.get())					
-					
+					.toString()
 				);
 				}
 				batchCount = 0;

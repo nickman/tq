@@ -67,7 +67,9 @@ import javax.management.remote.JMXConnectorServer;
 import javax.management.remote.JMXConnectorServerFactory;
 import javax.management.remote.JMXServiceURL;
 
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 
 
 
@@ -107,7 +109,9 @@ public class JMXHelper {
 	/** The legacy debug agent library */
 	public static final String LEGACY_AGENT_LIB = "-Xrunjdwp:";
 	
-	private static final Logger LOG = Logger.getLogger(JMXHelper.class);
+	/** Static class logger */
+	private static final Logger LOG = LoggerFactory.getLogger(JMXHelper.class);
+
 	
 	/**
 	 * Determines if this JVM is running with the debug agent enabled

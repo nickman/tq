@@ -33,9 +33,8 @@ import javax.sql.DataSource;
 import oracle.jdbc.OracleConnection;
 import oracle.sql.ArrayDescriptor;
 
-import org.apache.log4j.BasicConfigurator;
-import org.apache.log4j.Level;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import tqueue.db.localtypes.TQBATCH;
 //import tqueue.db.types.*;
@@ -61,7 +60,7 @@ public class ConnectionPool {
 	private static final Object lock = new Object();
 	
 	/** Static class logger */
-	private static final Logger LOG = Logger.getLogger(ConnectionPool.class);
+	private static final Logger LOG = LoggerFactory.getLogger(ConnectionPool.class);
 	
 	/** The type map applied to all connections */
 	private final Map<String, Class<?>> typeMap = new ConcurrentHashMap<String, Class<?>>();
@@ -112,7 +111,10 @@ public class ConnectionPool {
 		//config.setJdbcUrl("jdbc:oracle:thin:@//leopard:1521/XE");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
 		config.setMetricRegistry(registry);
-		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
+		config.setJdbcUrl("jdbc:oracle:thin:@(DESCRIPTION=(CONNECT_DATA=(SERVICE_NAME=ECS))(failover_mode=(type=select)(method=basic))(ADDRESS_LIST=(load_balance=off)(failover=on)(ADDRESS=(PROTOCOL=TCP)(HOST=10.5.202.163)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=10.5.202.161)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=10.5.202.162)(PORT=1521))))");
+		
+		
 		config.setUsername("tqreactor");
 		config.setPassword("tq");
 		config.addDataSourceProperty("cachePrepStmts", "true");
@@ -125,8 +127,8 @@ public class ConnectionPool {
 		config.setAutoCommit(false);
 		config.setRegisterMbeans(true);
 		config.setPoolName("TQReactorPool");
-		dataSource = new HikariDataSource(config);	
-		Logger.getLogger(com.zaxxer.hikari.pool.HikariPool.class).setLevel(Level.WARN);
+		dataSource = new HikariDataSource(config);
+		
 		Connection conn = null;
 		try {
 			conn = dataSource.getConnection();
@@ -191,7 +193,6 @@ public class ConnectionPool {
 	}
 	
 	public static void main(String[] args) {
-		BasicConfigurator.configure();
 		LOG.info("Testing Connection Pool....");
 		final ConnectionPool cp = ConnectionPool.getInstance();
 		Connection conn = null;

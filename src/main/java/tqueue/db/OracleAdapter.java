@@ -39,8 +39,8 @@ import oracle.jdbc.OracleCallableStatement;
 import oracle.jdbc.OracleResultSet;
 import oracle.jdbc.driver.OracleConnection;
 
-import org.apache.log4j.BasicConfigurator;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import tqueue.db.types.TQBATCH;
 import tqueue.db.types.TQTRADE;
@@ -58,7 +58,7 @@ import tqueue.pools.ConnectionPool;
 
 public class OracleAdapter {
 	/** Instance logger */
-	private final Logger log = Logger.getLogger(getClass());
+	private final Logger log = LoggerFactory.getLogger(getClass());
 	
 	public static final String POLL_BATCH_SQL = 
 			"SELECT TQBATCH(ACCOUNT,TCOUNT,FIRST_T,LAST_T,BATCH_ID,ROWIDS,STUBS ) " +
@@ -90,8 +90,7 @@ public class OracleAdapter {
 	};
 	protected final ThreadPoolExecutor tpe = new ThreadPoolExecutor(12, 24, 60, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(10240, false ), tf); 
 	
-	public static void main(String[] args) {
-		BasicConfigurator.configure();		
+	public static void main(String[] args) {		
 		OracleAdapter oa = new OracleAdapter();
 		oa.tpe.prestartAllCoreThreads();
 		oa.getTQBatches(0, 20000, 50, 5);		
