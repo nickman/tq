@@ -101,7 +101,7 @@ create or replace PACKAGE TQV AS
   -- Locks the stubs in a batch and assigns a batch id and batch timestamp, commiting the update if commitTX is != 0
   PROCEDURE LOCKBATCH(batch IN OUT TQBATCH, commitTX IN INT);
   -- Locks the stubs in a batch and assigns a batch id and batch timestamp then returns the rowid of the stored batch
-  FUNCTION LOCKBATCHREF(batch IN OUT TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2;
+  PROCEDURE LOCKBATCHREF(batch IN TQBATCH, accountId OUT INT, tcount OUT INT, firstTrade OUT INT, xrowid OUT VARCHAR2);
 
 
   -- Relocks the stubs in a batch as part of the actual trade processing transaction

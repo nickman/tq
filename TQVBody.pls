@@ -227,7 +227,7 @@ create or replace PACKAGE BODY TQV AS
     T TQSTUB;    
     r rowidtab;
   BEGIN
-    XLOGEVENT('[TRADEBATCH] STUB COUNT:' || STUBS.COUNT); 
+    -- XLOGEVENT('[TRADEBATCH] STUB COUNT:' || STUBS.COUNT); 
     IF STUBS.COUNT = 0 THEN
       RETURN;
     END IF;
@@ -497,10 +497,11 @@ create or replace PACKAGE BODY TQV AS
     --======================================================================================================
     --======================================================================================================
 
-  FUNCTION LOCKBATCHREF(batch IN OUT NOCOPY TQBATCH, accountId OUT INT, tcount OUT INT) RETURN VARCHAR2 IS
+  PROCEDURE LOCKBATCHREF(batch IN TQBATCH, accountId OUT INT, tcount OUT INT, firstTrade OUT INT, xrowid OUT VARCHAR2) IS
     srowid VARCHAR2(200);
     lockedStubs TQSTUB_ARR;
     now TIMESTAMP := SYSTIMESTAMP;
+    newBatch TQBATCH;
 
   BEGIN
     SELECT TQSTUB(
@@ -519,17 +520,19 @@ create or replace PACKAGE BODY TQV AS
       SELECT CHARTOROWID(COLUMN_VALUE) FROM TABLE(batch.ROWIDS)
     ) FOR UPDATE OF BATCH_ID, BATCH_TS SKIP LOCKED;
 
-
-    UPDATE_STUBS(lockedStubs, batch);
+    newBatch := new TQBATCH( batch.ACCOUNT, batch.TCOUNT, batch.FIRST_T, batch.LAST_T, batch.BATCH_ID, batch.ROWIDS, batch.STUBS);
+    UPDATE_STUBS(lockedStubs, newBatch);
     IF(CS(lockedStubs) > 0 ) THEN
-      INSERT INTO TQBATCHES VALUES(batch) RETURNING ROWIDTOCHAR(ROWID) INTO srowid;      
-      accountId := batch.ACCOUNT;
-      tcount := batch.STUBS.COUNT;
-      RETURN srowid;    
+      INSERT INTO TQBATCHES VALUES(newBatch) RETURNING ROWIDTOCHAR(ROWID) INTO srowid;      
+      accountId := newBatch.ACCOUNT;
+      tcount := newBatch.STUBS.COUNT;
+      firstTrade := newBatch.FIRST_T;
+      xrowid := srowid;    
     ELSE
       accountId := -1;
       tcount := 0;
-      RETURN null;          
+      firstTrade := null;
+      xrowid := null;
     END IF;
 
   END LOCKBATCHREF;

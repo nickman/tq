@@ -31,7 +31,9 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
 import java.sql.Timestamp;
+import java.util.HashSet;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -39,18 +41,17 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import oracle.jdbc.OracleCallableStatement;
 import oracle.jdbc.OracleConnection;
 import oracle.jdbc.OraclePreparedStatement;
 import oracle.jdbc.OracleResultSet;
 import oracle.sql.ORADataFactory;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import reactor.Environment;
 import reactor.core.config.DispatcherType;
-import reactor.core.dispatch.wait.ParkWaitStrategy;
-import reactor.core.processor.RingBufferWorkProcessor;
 import reactor.fn.Consumer;
 import reactor.fn.Function;
 import reactor.rx.Streams;
@@ -81,9 +82,9 @@ import com.codahale.metrics.MetricRegistry;
  * Delete batch refs on start 
  */
 
-public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
+public class TQReactor2 implements TQReactor2MBean, Runnable, ThreadFactory {
 	/** The TQReactor singleton instance */
-	private static volatile TQReactor instance = null;
+	private static volatile TQReactor2 instance = null;
 	/** The TQReactor singleton instance ctor lock */
 	private static final Object lock = new Object();
 	
@@ -152,9 +153,9 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The ID of the last trade batched and retrieved */
 	private int lastTradeQueueId = 0;
 	/** The poller's maximum number of trades to retrieve in one loop */
-	private int maxRows = 200000;
+	private int maxRows = 20000;
 	/** The poller's maximum batch size */
-	private int maxBatchSize = 1000;
+	private int maxBatchSize = 100;
 	/** The poller's wait period in seconds when waiting for the next rows to become available */
 	private int pollWaitTime = 0;
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
@@ -266,11 +267,11 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	 * Acquires the TQReactor singleton instance
 	 * @return the TQReactor singleton instance
 	 */
-	public static TQReactor getInstance() {
+	public static TQReactor2 getInstance() {
 		if(instance==null) {
 			synchronized(lock) {
 				if(instance==null) {
-					instance = new TQReactor();
+					instance = new TQReactor2();
 				}
 			}
 		}
@@ -302,7 +303,7 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 		bootThread.start();
 		
 //		BasicConfigurator.configure();
-		TQReactor tqr = TQReactor.getInstance();
+		TQReactor2 tqr = TQReactor2.getInstance();
 		tqr.log.info("TQReactor Test");
 		try {
 			tqr.start();
@@ -365,7 +366,7 @@ ORA-06512: at line 1
 	at java.lang.Thread.run(Thread.java:745)
 	 */
 	
-	private TQReactor() {
+	private TQReactor2() {
 		Environment.initializeIfEmpty().assignErrorJournal(new Consumer<Throwable>(){
 			@Override
 			public void accept(final Throwable t) {
@@ -749,6 +750,7 @@ ORA-06512: at line 1
 				int dropCount = 0;
 				int rsetLoops = 0;
 				final long rsetStart = System.currentTimeMillis();
+				Set<BatchRoutingKey> batchRoutingKeys = new HashSet<BatchRoutingKey>();
 				while(pollerRset!=null && pollerRset.next()) {
 					readBatchesPerSec.mark();
 					if(rowCount==0) {
@@ -800,18 +802,24 @@ ORA-06512: at line 1
 					batchCount++;
 					pollerConnection.commit();
 //					avgRingBufferCap.update(ringBuffer.getAvailableCapacity());
-					final long start = System.currentTimeMillis();
+//					final long start = System.currentTimeMillis();
 					if(resetFlag.get()) break;
 					final BatchRoutingKey brk = new BatchRoutingKey(rowid, accountId, tcount, firstTrade); 
-					ringBuffer.onNext(brk);	
+					//ringBuffer.onNext(brk);
+					batchRoutingKeys.add(brk);
 					//log.info("Dispatched {}", brk);
-					final long elapsed = System.currentTimeMillis() - start;
-					inFlight.incrementAndGet();
-					avgBackPressureTime.update(elapsed);
-					inFlight.incrementAndGet();
+//					final long elapsed = System.currentTimeMillis() - start;
+					
+										
 									
 				}  //  end of result set loop
-				
+				final long start = System.currentTimeMillis();
+				for(BatchRoutingKey brk: batchRoutingKeys) {
+					ringBuffer.onNext(brk);
+					inFlight.incrementAndGet();
+				}
+				final long elapsed = System.currentTimeMillis() - start;
+				avgBackPressureTime.update(elapsed);
 				if(loopCount>0 && rsetLoops > 0) {
 					resultSetCount.update(rowCount);
 					log.info("========================================== Loop:" + loopCount + ", Batches:" + rsetLoops + " rowCount:" + rowCount);
