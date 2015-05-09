@@ -595,10 +595,10 @@ ORA-06512: at line 1
 	 * Initializes the TQBatch broadcaster
 	 */
 	protected void initSink() {
-//		final int totalStreams = CORES * streamsPerCore;
+		final int totalStreams = CORES * streamsPerCore;
 //		final int totalStreams = CORES;
 //		final int totalStreams = 4;
-		final int totalStreams = 6;
+//		final int totalStreams = 6;
 		final int ringBufferSize = findNextPositivePowerOfTwo(totalStreams);
 		log.info("\n\t=====================================\n\tRingBuffer Slots:" + ringBufferSize + "\n\t=====================================");
 		tpe = new ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
@@ -1045,7 +1045,7 @@ ORA-06512: at line 1
 		TQBATCH preBatch = null;
 		TQBATCH postBatch = null;
 		try {
-			log.info("Processing {}", batchKey);
+			//log.info("Processing {}", batchKey);
 			final long startTime = System.currentTimeMillis();
 			conn = ConnectionPool.getInstance().getConnection();
 			oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);

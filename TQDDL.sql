@@ -219,16 +219,31 @@ CREATE OR REPLACE TYPE TQSTUB_ARR FORCE AS TABLE OF TQSTUB;
 
 
 
-create or replace TYPE TQBATCH FORCE AS OBJECT (
+--------------------------------------------------------
+--  DDL for Type TQBATCH
+--------------------------------------------------------
+
+  CREATE OR REPLACE TYPE TQBATCH FORCE AS OBJECT (
   ACCOUNT           INT,
   TCOUNT            INT,
   FIRST_T           INT,
   LAST_T            INT,
   BATCH_ID          INT,
   ROWIDS            XROWIDS,
-  STUBS             TQSTUB_ARR
+  STUBS             TQSTUB_ARR,
+  MAP MEMBER FUNCTION F RETURN NUMBER
 );
 /
+CREATE OR REPLACE TYPE BODY TQBATCH AS
+
+  MAP MEMBER FUNCTION F RETURN NUMBER AS
+  BEGIN    
+    RETURN SELF.FIRST_T;
+  END F;
+
+END;
+/
+
 
 create table TQBATCHES OF TQBATCH
   NESTED TABLE ROWIDS STORE AS ROWIDS_NESTED_TAB
