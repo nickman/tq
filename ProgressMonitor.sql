@@ -18,7 +18,13 @@ select 'NEXT STUB', min(tqueue_id) from tqstubs
 UNION ALL
 select 'LAST STUB', max(tqueue_id) from tqstubs
 UNION ALL
-select 'TPS', count(*)/15 from tqueue where status_code = 'CLEARED' and UPDATE_TS >= (SYSDATE - (1/24/60/4))
+select 'TPS(1S)', count(*) from tqueue where status_code = 'CLEARED' and UPDATE_TS >= (SYSDATE - (1/24/60/60))
+UNION ALL
+select 'TPS(15S)', count(*)/15 from tqueue where status_code = 'CLEARED' and UPDATE_TS >= (SYSDATE - (1/24/60/4))
+UNION ALL
+select 'TPS(1M)', count(*)/60 from tqueue where status_code = 'CLEARED' and UPDATE_TS >= (SYSDATE - (1/24/60))
+
+
 
 select * from tqstubs
 

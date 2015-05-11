@@ -52,6 +52,7 @@ import org.slf4j.LoggerFactory;
 
 import reactor.Environment;
 import reactor.core.config.DispatcherType;
+import reactor.core.processor.RingBufferWorkProcessor;
 import reactor.fn.Consumer;
 import reactor.fn.Function;
 import reactor.rx.Streams;
@@ -191,7 +192,8 @@ public class TQReactor2 implements TQReactor2MBean, Runnable, ThreadFactory {
 	protected ThreadPoolExecutor tpe = null;
 	
 	/** The ring buffer processor */
-	protected Broadcaster<BatchRoutingKey> ringBuffer = null;
+	//protected Broadcaster<BatchRoutingKey> ringBuffer = null;
+	protected RingBufferWorkProcessor<BatchRoutingKey> ringBuffer = null;
 	
 	/** Flag indicating the poller has been reset */
 	protected final AtomicBoolean resetFlag = new AtomicBoolean(false);
@@ -601,7 +603,8 @@ ORA-06512: at line 1
 		log.info("\n\t=====================================\n\tRingBuffer Slots:" + ringBufferSize + "\n\t=====================================");
 		tpe = new ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
 //		tpe.prestartAllCoreThreads();
-		ringBuffer = Broadcaster.create(Environment.newDispatcher("tqdispatcher", 32*totalStreams, totalStreams, DispatcherType.RING_BUFFER));
+		ringBuffer = RingBufferWorkProcessor.create("ringbuff", CORES); 
+				//Broadcaster.create(Environment.newDispatcher("tqdispatcher", 32*totalStreams, totalStreams, DispatcherType.RING_BUFFER));
 				//RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());
 		
 		ctx = Streams.wrap(ringBuffer)
