@@ -311,6 +311,28 @@ create or replace TYPE ACCT_DECODE_ARR IS  TABLE OF ACCT_DECODE;
   BATCH_TS
   FROM TQSTUBS;
 
+
+  -- *******************************************************
+  --    TCP Logger
+  -- *******************************************************
+
+  create or replace procedure tlogevent 
+(
+  message in varchar2 default 'NOOP' 
+) as 
+  c  utl_tcp.connection;  -- TCP/IP connection to the Web server
+  ret_val pls_integer; 
+begin  
+    c := utl_tcp.open_connection(remote_host => '127.0.0.1',remote_port =>  1234,  charset     => 'US7ASCII');  -- open connection
+    ret_val := utl_tcp.write_line(c, message);   
+    utl_tcp.close_connection(c);
+  EXCEPTION WHEN OTHERS THEN
+        BEGIN
+            utl_tcp.close_connection(c);
+        END;
+  null;
+end tlogevent;
+
   -- *******************************************************
   --    Autonomous TX Logger
   -- *******************************************************

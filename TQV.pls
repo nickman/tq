@@ -114,6 +114,15 @@ create or replace PACKAGE TQV AS
   PROCEDURE SAVETRADES(trades IN TQTRADE_ARR, batchId IN INT);
   -- Deletes all the stubs for a batch by the passed rowids
   PROCEDURE FINISHBATCH(batchRowids IN XROWIDS);
+  
+  -- ==================================================================================
+  -- Streaming Batch Query
+  -- ==================================================================================
+  FUNCTION STREAMTBATCHES(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE;
+  PROCEDURE CLOSESTREAM;
+  TYPE StreamCursorTyp IS REF CURSOR;
+  FUNCTION STREAMCURSOR(STARTING_ID IN INT DEFAULT 0, MAX_ROWS IN INT DEFAULT 5000, MAX_BATCH_SIZE IN INT DEFAULT 10) RETURN StreamCursorTyp;
+  -- ==================================================================================
 
   -- PROCEDURE RUNBATCH(batchId IN INT, lockName IN VARCHAR2);
 
@@ -125,6 +134,9 @@ create or replace PACKAGE TQV AS
 
   FUNCTION HANDLE_CHANGE(n IN OUT CQ_NOTIFICATION$_DESCRIPTOR) RETURN NUMBER;
 
+
+
+  PROCEDURE TLOG(message in varchar2 default 'NOOP');
 
 
   -- =============================================================================
