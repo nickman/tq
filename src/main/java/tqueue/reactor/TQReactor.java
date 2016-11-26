@@ -152,9 +152,9 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	/** The ID of the last trade batched and retrieved */
 	private int lastTradeQueueId = 0;
 	/** The poller's maximum number of trades to retrieve in one loop */
-	private int maxRows = 200000;
+	private int maxRows = 5000;
 	/** The poller's maximum batch size */
-	private int maxBatchSize = 1000;
+	private int maxBatchSize = 50;
 	/** The poller's wait period in seconds when waiting for the next rows to become available */
 	private int pollWaitTime = 0;
 	/** The poller's maximum wait loops when waiting for the next rows to become available */
@@ -190,7 +190,8 @@ public class TQReactor implements TQReactorMBean, Runnable, ThreadFactory {
 	protected ThreadPoolExecutor tpe = null;
 	
 	/** The ring buffer processor */
-	protected Broadcaster<BatchRoutingKey> ringBuffer = null;
+	//protected Broadcaster<BatchRoutingKey> ringBuffer = null;
+	protected RingBufferWorkProcessor<BatchRoutingKey> ringBuffer = null;
 	
 	/** Flag indicating the poller has been reset */
 	protected final AtomicBoolean resetFlag = new AtomicBoolean(false);
@@ -600,7 +601,8 @@ ORA-06512: at line 1
 		log.info("\n\t=====================================\n\tRingBuffer Slots:" + ringBufferSize + "\n\t=====================================");
 		tpe = new ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tf);
 //		tpe.prestartAllCoreThreads();
-		ringBuffer = Broadcaster.create(Environment.newDispatcher("tqdispatcher", 32*totalStreams, totalStreams, DispatcherType.RING_BUFFER));
+		ringBuffer = RingBufferWorkProcessor.create("ringbuff", CORES*2); 
+				// Broadcaster.create(Environment.newDispatcher("tqdispatcher", 32*totalStreams, totalStreams, DispatcherType.RING_BUFFER));
 				//RingBufferWorkProcessor.create(tpe, ringBufferSize, new ParkWaitStrategy());
 		
 		ctx = Streams.wrap(ringBuffer)
@@ -1034,6 +1036,7 @@ ORA-06512: at line 1
 	 * @param batchKey The batch to process
 	 */
 	public void processBatch(final BatchRoutingKey batchKey) {   // --   58 to 60 ms. per execution
+		//if(1==1) return;
 		Connection conn = null;
 		OracleConnection oraConn = null;
 		OraclePreparedStatement ps = null;
