@@ -12,18 +12,17 @@
  		<compiler-source.version>1.8</compiler-source.version>
  		<compiler-target.version>1.8</compiler-target.version>
  		<!-- Dependencies --> 
-		<oracle.version>11.2.0.2.0</oracle.version>
+		<oracle.version>12.1.0.2.0</oracle.version>
 		<guava.version>18.0</guava.version>
 		<junit.version>4.8.2</junit.version>
 		<h2.version>1.3.168</h2.version>
 		<groovy.version>2.3.6</groovy.version>
-		<jmx-optional.version>1.0-b02-SNAPSHOT</jmx-optional.version>
 		<high-scale-lib.version>1.1.4</high-scale-lib.version>
 		<log4j.version>1.2.16</log4j.version>
     	<logback-core.version>1.0.13</logback-core.version>
     	<logback-classic.version>1.0.13</logback-classic.version>
 		<hikari.version>2.3.6</hikari.version>
-		<metrics.version>4.0.0-SNAPSHOT</metrics.version>
+		<metrics.version>3.1.2</metrics.version>
 		<reactor.version>2.0.0.RELEASE</reactor.version>
 		<slf4j.version>1.7.7</slf4j.version>
 		<hawtio.version>1.4.19</hawtio.version>
@@ -90,7 +89,7 @@
 
 		<dependency>
 			<groupId>com.oracle</groupId>
-			<artifactId>ojdbc6</artifactId>
+			<artifactId>ojdbc7</artifactId>
 			<version>${oracle.version}</version>
 		</dependency>
 
@@ -139,11 +138,6 @@
 		  <version>${groovy.version}</version>
 		</dependency>
 	
-		<dependency>
-		  <groupId>com.sun.jdmk</groupId>
-		  <artifactId>jmx-optional</artifactId>
-		  <version>${jmx-optional.version}</version>
-		</dependency>
 
 	    <dependency>
 	      <groupId>com.google.guava</groupId>

@@ -81,18 +81,57 @@ sql.eachRow("SELECT SECURITY_DISPLAY_NAME FROM SECURITY", { securities.add(it.SE
 sql.eachRow("SELECT ACCOUNT_DISPLAY_NAME FROM ACCOUNT", { accounts.add(it.ACCOUNT_DISPLAY_NAME); });
 println "Caches Loaded";
 
-for(x in 0..-1) {
+for(x in 0..5) {
     sql.withTransaction {
         sql.withBatch { st ->
-            for(i in 0..1000) {
+            batchId = sql.firstRow("SELECT SEQ_TQBATCH_ID.NEXTVAL BATCH_ID FROM DUAL").BATCH_ID.toInteger();
+            long start = System.currentTimeMillis();
+            for(i in 0..10000) {
                 s = randomSecurity();
                 a = randomAccount();
-                //  TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
-                st.execute("INSERT INTO TQUEUE VALUES(SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',  '$s', '$a', NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL)");
+                //  TQUEUE_ID,XID,STATUS_CODE,
+                // SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,
+                // SECURITY_ID,SECURITY_TYPE,
+                // ACCOUNT_ID,
+                // BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+                st.execute("""INSERT INTO TQUEUE VALUES(
+                    SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',       --TQUEUE_ID,XID,STATUS_CODE,
+                    '$s', '$a',                                             --SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,
+                    NULL, NULL,                                             --SECURITY_ID,SECURITY_TYPE,
+                    NULL, $batchId,                                         --ACCOUNT_ID, BATCH_ID
+                    SYSDATE, NULL, NULL                                     --CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+                    )""");
             }
+            long elapsed = System.currentTimeMillis() - start;
+            println "Inserted 10000 rows in $elapsed ms.";
         }    
     }
     println "Completed Batch #$x";
+
+// TQROWID       NOT NULL ROWID        
+// TQUEUE_ID     NOT NULL NUMBER(38)   
+// XID           NOT NULL RAW(8 BYTE)  
+// SECURITY_ID   NOT NULL NUMBER(38)   
+// SECURITY_TYPE NOT NULL CHAR(1)      
+// ACCOUNT_ID    NOT NULL NUMBER(38)   
+// BATCH_ID      NOT NULL NUMBER(38)   
+// BATCH_TS               TIMESTAMP(6) 
+
+//=====================================================================
+//=====================================================================
+// TQUEUE_ID             NOT NULL NUMBER(38)    
+// XID                   NOT NULL RAW(8 BYTE)   
+// STATUS_CODE           NOT NULL VARCHAR2(15)  
+// SECURITY_DISPLAY_NAME NOT NULL VARCHAR2(64)  
+// ACCOUNT_DISPLAY_NAME  NOT NULL VARCHAR2(36)  
+// SECURITY_ID                    NUMBER(38)    
+// SECURITY_TYPE                  CHAR(1)       
+// ACCOUNT_ID                     NUMBER(38)    
+// BATCH_ID                       NUMBER(38)    
+// CREATE_TS             NOT NULL DATE          
+// UPDATE_TS                      DATE          
+// ERROR_MESSAGE                  VARCHAR2(512) 
+
 }
 
 println "Trades Inserted";
