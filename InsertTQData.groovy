@@ -8,8 +8,8 @@ import oracle.jdbc.aq.*;
 String DRIVER = "oracle.jdbc.OracleDriver";
 //String URL = "jdbc:oracle:thin:@//leopard:1521/XE";
 //String URL = "jdbc:oracle:thin:@//tporacle:1521/ORCL";
-//String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
-String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
+String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
+//String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
 //String URL = "jdbc:oracle:thin:@//horacle:1521/cdb1";
 String USER = "tqreactor";
 String PASS = "tq";
@@ -95,7 +95,7 @@ for(x in 0..5) {
                 // ACCOUNT_ID,
                 // BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
                 st.execute("""INSERT INTO TQUEUE VALUES(
-                    SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',       --TQUEUE_ID,XID,STATUS_CODE,
+                    SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID, 'PENDING',       --TQUEUE_ID,XID,STATUS_CODE,
                     '$s', '$a',                                             --SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,
                     NULL, NULL,                                             --SECURITY_ID,SECURITY_TYPE,
                     NULL, $batchId,                                         --ACCOUNT_ID, BATCH_ID

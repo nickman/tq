@@ -5,7 +5,7 @@ import oracle.jdbc.*;
 import oracle.jdbc.aq.*;
 
 String DRIVER = "oracle.jdbc.OracleDriver";
-String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
+String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
 String USER = "tqreactor";
 String PASS = "tq";
 
@@ -176,6 +176,24 @@ genTableParams = { rowid, xrowid, inout, prefix, tableName ->
 	return b.append(")").toString();
 }
 
+genTableSelect = { rowid, xrowid, prefix, tableName ->
+	meta = getTabMeta(tableName);
+	b = new StringBuilder();
+	if(rowid) {
+		if(xrowid) {
+			b.append("ROWIDTOCHAR(").append(prefix).append("ROWID),");
+		} else {
+			b.append(prefix).append("ROWID,");
+		}
+	}
+	meta.values().each() { m ->
+		b.append(prefix).append(m.cname).append(",");
+	}
+	b.deleteCharAt(b.length()-1);
+	return b.toString();
+}
+
+
 
 /*
 println genObject(true, true, false, "TQUEUE");
@@ -187,12 +205,16 @@ println genObject(true, true, true, "TQSTUBS");
 println genPipeRecsIntoObjects(true, "TQUEUE");
 println genPipeRecsIntoObjects(true, "TQSTUBS");
 
+println genObject(true, true, false, "ACCOUNT");
+println genObject(true, true, false, "SECURITY");
+
 
 */
 
-println genObject(true, true, true, "ACCOUNT");
-println genObject(true, true, true, "SECURITY");
 
+println genTableSelect(true, true, "", "TQUEUE");
+
+//println genTableParams(true, false, "IN", "", "TQUEUE");
 
 
 //println genPipeRecsIntoObjects(true, "TQSTUBS");

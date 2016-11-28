@@ -1,11 +1,8 @@
 --------------------------------------------------------
---  File created - Monday-November-28-2016   
---------------------------------------------------------
---------------------------------------------------------
 --  DDL for Package TQ
 --------------------------------------------------------
 
-  CREATE OR REPLACE PACKAGE "TQREACTOR"."TQ" as 
+  CREATE OR REPLACE PACKAGE "TQREACTOR"."TQ" authid current_user as 
 
 --=========================================================================
 -- Record Types and Cursor for table TQUEUE
@@ -47,9 +44,9 @@
 -- Record Types for table ACCOUN T
 --=========================================================================    
 TYPE ACCOUNT_REC IS RECORD (
-	XROWID ROWID,
-	ACCOUNT_ID ACCOUNT.ACCOUNT_ID%TYPE,
-	ACCOUNT_DISPLAY_NAME ACCOUNT.ACCOUNT_DISPLAY_NAME%TYPE
+  XROWID ROWID,
+  ACCOUNT_ID ACCOUNT.ACCOUNT_ID%TYPE,
+  ACCOUNT_DISPLAY_NAME ACCOUNT.ACCOUNT_DISPLAY_NAME%TYPE
 );
 TYPE ACCOUNT_REC_ARR IS TABLE OF ACCOUNT_REC;
 TYPE ACCOUNT_REC_CUR IS REF CURSOR RETURN ACCOUNT_REC;
@@ -57,10 +54,10 @@ TYPE ACCOUNT_REC_CUR IS REF CURSOR RETURN ACCOUNT_REC;
 -- Record Types for table SECURITY
 --=========================================================================  
 TYPE SECURITY_REC IS RECORD (
-	XROWID ROWID,
-	SECURITY_ID SECURITY.SECURITY_ID%TYPE,
-	SECURITY_DISPLAY_NAME SECURITY.SECURITY_DISPLAY_NAME%TYPE,
-	SECURITY_TYPE SECURITY.SECURITY_TYPE%TYPE
+  XROWID ROWID,
+  SECURITY_ID SECURITY.SECURITY_ID%TYPE,
+  SECURITY_DISPLAY_NAME SECURITY.SECURITY_DISPLAY_NAME%TYPE,
+  SECURITY_TYPE SECURITY.SECURITY_TYPE%TYPE
 );
 TYPE SECURITY_REC_ARR IS TABLE OF SECURITY_REC;
 TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
@@ -74,6 +71,7 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
   TYPE ROWID_ARR IS TABLE OF ROWID;
   TYPE CQNDECODE IS TABLE OF VARCHAR2(30) INDEX BY PLS_INTEGER;
   
+  
 
 --=========================================================================
 -- Converts TQUEUE Records to TQUEUE Objects
@@ -82,27 +80,35 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
 --=========================================================================
 -- Converts TQSTUBS Records to TQSTUBS Objects
 --=========================================================================  
-  FUNCTION TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE;
+--  FUNCTION TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE;
   
   -- *******************************************************
   --    Decode SecurityDisplayName
   -- *******************************************************  
-  FUNCTION DECODE_SECURITY(securityDisplayName IN VARCHAR2) RETURN SECURITY_REC;
+  FUNCTION DECODE_SECURITY(securityDisplayName IN VARCHAR2) RETURN SECURITY_REC; -- RESULT_CACHE;
 
   -- *******************************************************
   --    Decode AccountDisplayName
   -- *******************************************************
-  FUNCTION DECODE_ACCOUNT(accountDisplayName IN VARCHAR2) RETURN ACCOUNT_REC;
+  FUNCTION DECODE_ACCOUNT(accountDisplayName IN VARCHAR2) RETURN ACCOUNT_REC; -- RESULT_CACHE;
   
   -- *******************************************************
   --    Handle TQUEUE INSERT Trigger
   -- *******************************************************
   PROCEDURE TRIGGER_STUB(rowid IN ROWID, tqueueId IN NUMBER, statusCode IN VARCHAR2, securityDisplayName IN VARCHAR2, accountDisplayName IN VARCHAR2, batchId IN NUMBER);
 
+  -- *******************************************************
+  --    Groups an array of TQSTUBS_OBJ into an 
+  --    array of TQBATCHes.
+  -- *******************************************************
+  FUNCTION GROUP_TQBATCHES(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE;
+
 
   FUNCTION QUERY_BATCHES(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999 ) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE;
   
-  -- MOD(ORA_HASH(ACCOUNT_ID, 999999),12) = 3 
+  FUNCTION GET_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR;
+  
+  FUNCTION PIPE_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE;
   
   
   
