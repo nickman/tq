@@ -185,11 +185,15 @@ println genObject(true, true, true, "TQUEUE");
 println genObject(true, true, true, "TQSTUBS");
 
 println genPipeRecsIntoObjects(true, "TQUEUE");
+println genPipeRecsIntoObjects(true, "TQSTUBS");
 
 
 */
 
-println genObject(true, true, false, "TQSTUBS");
+println genObject(true, true, true, "ACCOUNT");
+println genObject(true, true, true, "SECURITY");
+
+
 
 //println genPipeRecsIntoObjects(true, "TQSTUBS");
 
