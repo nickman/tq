@@ -1,8 +1,13 @@
---------------------------------------------------------
---  DDL for Package TQ
---------------------------------------------------------
-
-  CREATE OR REPLACE PACKAGE "TQREACTOR"."TQ" authid current_user as 
+create or replace PACKAGE TQ /* authid current_user */ as 
+  -- Enablement flag for tcp logging
+  TCPLOG_ENABLED BOOLEAN := FALSE;
+  
+  TYPE StreamCursorTyp IS REF CURSOR;
+  
+  PROCEDURE log(message IN VARCHAR2);
+  PROCEDURE SET_TCPLOG_ENABLED(enabled IN PLS_INTEGER);
+  FUNCTION IS_TCPLOG_ENABLED RETURN PLS_INTEGER;
+  
 
 --=========================================================================
 -- Record Types and Cursor for table TQUEUE
@@ -80,17 +85,25 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
 --=========================================================================
 -- Converts TQSTUBS Records to TQSTUBS Objects
 --=========================================================================  
---  FUNCTION TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE;
+  FUNCTION TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE;
   
   -- *******************************************************
   --    Decode SecurityDisplayName
   -- *******************************************************  
-  FUNCTION DECODE_SECURITY(securityDisplayName IN VARCHAR2) RETURN SECURITY_REC; -- RESULT_CACHE;
+  FUNCTION DECODE_SECURITY(securityDisplayName IN VARCHAR2) RETURN SECURITY_REC RESULT_CACHE;
+  -- *******************************************************
+  --    Decode SecurityDisplayName (OUT vars)
+  -- *******************************************************  
+  PROCEDURE DECODE_SECURITY(securityDisplayName IN VARCHAR2, securityId OUT NUMBER, securityType OUT CHAR);
 
   -- *******************************************************
   --    Decode AccountDisplayName
   -- *******************************************************
-  FUNCTION DECODE_ACCOUNT(accountDisplayName IN VARCHAR2) RETURN ACCOUNT_REC; -- RESULT_CACHE;
+  FUNCTION DECODE_ACCOUNT(accountDisplayName IN VARCHAR2) RETURN ACCOUNT_REC RESULT_CACHE;
+  -- *******************************************************
+  --    Decode AccountDisplayName (OUT vars)
+  -- *******************************************************
+  PROCEDURE DECODE_ACCOUNT(accountDisplayName IN VARCHAR2, accountId OUT NUMBER);  
   
   -- *******************************************************
   --    Handle TQUEUE INSERT Trigger
@@ -110,6 +123,25 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
   
   FUNCTION PIPE_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE;
   
+  FUNCTION DELETE_STUB_BATCH(xrowids IN XROWIDS) RETURN NUMBER;
+  
+--=============================================================================================================  
+-- Returns an open cursor to retrieve the trades for the passed TQUEUE XROWIDs
+--=============================================================================================================
+  FUNCTION PIPE_TRADES_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR;
+  
+  
+  
+  FUNCTION ROOT_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR;
+--=============================================================================================================  
+-- Enriches each passed trade supplied in the cursor with the account id and pipes the enriched trades out
+--=============================================================================================================  
+  FUNCTION XENRICH_TRADE_ACCOUNTS(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE;
+--=============================================================================================================  
+-- Enriches each passed trade supplied in the cursor with the security id and security type and pipes the enriched trades out
+--=============================================================================================================  
+  FUNCTION XENRICH_TRADE_SECURITIES(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE;
+  
   
   
   -- *******************************************************
@@ -118,5 +150,3 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
   FUNCTION CURRENTXID RETURN RAW;  
 
 end tq;
-
-/

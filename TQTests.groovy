@@ -5,7 +5,8 @@ import oracle.jdbc.*;
 import oracle.jdbc.aq.*;
 
 String DRIVER = "oracle.jdbc.OracleDriver";
-String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
+//String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
+String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
 String USER = "tqreactor";
 String PASS = "tq";
 

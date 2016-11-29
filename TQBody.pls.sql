@@ -1,10 +1,44 @@
---------------------------------------------------------
---  DDL for Package Body TQ
---------------------------------------------------------
+create or replace PACKAGE BODY TQ as
 
-  CREATE OR REPLACE PACKAGE BODY "TQREACTOR"."TQ" as
+    cursor sqx(xrowids IN XROWIDS) is SELECT TQUEUE_OBJ(V) FROM TABLE (
+      CURSOR(SELECT * FROM TABLE(TQUEUE_RECS_TO_OBJS(
+            CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_ACCOUNTS(
+              CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_SECURITIES(
+                CURSOR(
+                  SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+                  FROM TQUEUE T WHERE EXISTS (
+                    SELECT RID FROM (
+                      SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS)
+                  ) WHERE RID = T.ROWID)              
+                )
+              )))
+            )))
+          )))
+    )V;
 
 
+  PROCEDURE log(message IN VARCHAR2) IS
+  BEGIN
+    IF(TCPLOG_ENABLED) THEN
+      LOGGING.tcplog(message);
+    END IF;
+  END log;
+
+  PROCEDURE SET_TCPLOG_ENABLED(enabled IN PLS_INTEGER) IS
+  BEGIN
+    IF(enabled=0) THEN
+      TCPLOG_ENABLED := FALSE;
+    ELSE
+      TCPLOG_ENABLED := TRUE;
+    END IF;
+  END SET_TCPLOG_ENABLED;
+  
+  FUNCTION IS_TCPLOG_ENABLED RETURN PLS_INTEGER IS
+  BEGIN
+    IF(TCPLOG_ENABLED) THEN RETURN 1;
+    ELSE RETURN 0;
+    END IF;
+  END IS_TCPLOG_ENABLED;
 
 --=========================================================================
 -- Converts TQUEUE Records to TQUEUE Objects
@@ -20,46 +54,69 @@
       RETURN;
       EXCEPTION        
         WHEN NO_DATA_NEEDED THEN 
-          LOGGING.tcplog('TQUEUE_RECS_TO_OBJS: no_data_needed');
+          Log('TQUEUE_RECS_TO_OBJS: no_data_needed');
           return;
   END TQUEUE_RECS_TO_OBJS;
 --=========================================================================
 -- Converts TQSTUBS Records to TQSTUBS Objects
 --=========================================================================    
---  FUNCTION TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
---    rec TQSTUBS_REC;
---  BEGIN
---      LOOP
---        FETCH p into rec;
---        EXIT WHEN p%NOTFOUND;
---        PIPE ROW(TQSTUBS_OBJ(rec.XROWID,rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS));
---      END LOOP;
---      RETURN;
---      EXCEPTION
---        WHEN NO_DATA_NEEDED THEN 
---          LOGGING.tcplog('TQSTUBS_RECS_TO_OBJS: no_data_needed');
---          return;        
---  END TQSTUBS_RECS_TO_OBJS;
+  FUNCTION TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
+    rec TQSTUBS_REC;
+  BEGIN
+      LOOP
+        FETCH p into rec;
+        EXIT WHEN p%NOTFOUND;
+        PIPE ROW(TQSTUBS_OBJ(rec.XROWID,rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS));
+      END LOOP;
+      RETURN;
+      EXCEPTION
+        WHEN NO_DATA_NEEDED THEN 
+          Log('TQSTUBS_RECS_TO_OBJS: no_data_needed');
+          return;        
+  END TQSTUBS_RECS_TO_OBJS;
   
   -- *******************************************************
   --    Decode SecurityDisplayName
   -- *******************************************************  
-  FUNCTION DECODE_SECURITY(securityDisplayName IN VARCHAR2) RETURN SECURITY_REC /* RESULT_CACHE RELIES_ON (SECURITY) */ IS
+  FUNCTION DECODE_SECURITY(securityDisplayName IN VARCHAR2) RETURN SECURITY_REC RESULT_CACHE RELIES_ON (SECURITY)  IS
     rec SECURITY_REC;
   BEGIN
     SELECT S.ROWID, S.* into rec FROM SECURITY S WHERE SECURITY_DISPLAY_NAME = securityDisplayName;
     RETURN rec;
   END DECODE_SECURITY;
+  
+  -- *******************************************************
+  --    Decode SecurityDisplayName (OUT vars)
+  -- *******************************************************  
+  PROCEDURE DECODE_SECURITY(securityDisplayName IN VARCHAR2, securityId OUT NUMBER, securityType OUT CHAR) IS
+    rec SECURITY_REC;
+  BEGIN
+    rec := DECODE_SECURITY(securityDisplayName);
+    securityId := rec.SECURITY_ID;
+    securityType := rec.SECURITY_TYPE;
+  END DECODE_SECURITY;
+  
 
   -- *******************************************************
   --    Decode AccountDisplayName
   -- *******************************************************
-  FUNCTION DECODE_ACCOUNT(accountDisplayName IN VARCHAR2) RETURN ACCOUNT_REC /* RESULT_CACHE RELIES_ON (ACCOUNT) */ IS
+  FUNCTION DECODE_ACCOUNT(accountDisplayName IN VARCHAR2) RETURN ACCOUNT_REC RESULT_CACHE RELIES_ON (ACCOUNT) IS
     rec ACCOUNT_REC;
   BEGIN
     SELECT A.ROWID, A.* INTO rec FROM ACCOUNT A WHERE ACCOUNT_DISPLAY_NAME = accountDisplayName;
     RETURN rec;
   END DECODE_ACCOUNT;
+  
+  -- *******************************************************
+  --    Decode AccountDisplayName (OUT vars)
+  -- *******************************************************
+  PROCEDURE DECODE_ACCOUNT(accountDisplayName IN VARCHAR2, accountId OUT NUMBER) IS
+    rec ACCOUNT_REC;
+  BEGIN
+    rec := DECODE_ACCOUNT(accountDisplayName);
+    accountId := rec.ACCOUNT_ID;
+  END DECODE_ACCOUNT;
+  
   
   -- *******************************************************
   --    Handle TQUEUE INSERT Trigger
@@ -72,6 +129,7 @@
     accountId := DECODE_ACCOUNT(accountDisplayName).ACCOUNT_ID;
     INSERT INTO TQSTUBS VALUES(rowid, tqueueId, CURRENTXID(), srec.SECURITY_ID, srec.SECURITY_TYPE, accountId, batchId, SYSTIMESTAMP);
   END TRIGGER_STUB;
+  
 
   -- *******************************************************
   --    Groups an array of TQSTUBS_OBJ into an 
@@ -87,9 +145,9 @@
       SELECT TQSTUBS_OBJ(ROWIDTOCHAR(ROWID), ROWIDTOCHAR(TQROWID),TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,BATCH_TS)
         FROM TQSTUBS T WHERE (threadMod = -1 OR MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod) ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID;
   BEGIN
-    LOGGING.tcplog('GROUP_TQBATCHES START, THREAD:' || threadMod);
+    Log('GROUP_TQBATCHES START, THREAD:' || threadMod);
     OPEN getBatches;
-    LOGGING.tcplog('GROUP_TQBATCHES: Cursor Opened');
+    Log('GROUP_TQBATCHES: Cursor Opened');
     LOOP
       EXIT WHEN rows >= rowLimit;
       FETCH getBatches INTO stub;
@@ -100,12 +158,12 @@
         IF(tqb IS NOT NULL) THEN
           PIPE ROW (tqb);
           piped := piped + 1;
-          LOGGING.tcplog('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows);        
+          Log('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows);        
           tqb := NULL;
         END IF;
         PIPE ROW (NEW TQBATCH(stub, piped));
         piped := piped + 1;
-        LOGGING.tcplog('GROUP_TQBATCHES PIPED:' || piped || ', size:1' || ',trows:' || rows);        
+        Log('GROUP_TQBATCHES PIPED:' || piped || ', size:1' || ',trows:' || rows);        
         CONTINUE;
       END IF;
       IF(tqb IS NULL) THEN
@@ -114,28 +172,28 @@
         IF(tqb.ACCOUNT != stub.ACCOUNT_ID) THEN
           PIPE ROW(tqb);
           piped := piped + 1;
-          LOGGING.tcplog('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows); 
+          Log('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows); 
           tqb := NEW TQBATCH(stub, piped);
         ELSE           
           tqb.ADDSTUB(stub);
         END IF;
       END IF;
     END LOOP;
-    LOGGING.tcplog('GROUP_TQBATCHES: END LOOP');
+    Log('GROUP_TQBATCHES: END LOOP');
     IF(tqb IS NOT NULL) THEN 
       PIPE ROW(tqb);
       piped := piped + 1;
-      LOGGING.tcplog('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows); 
+      Log('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows); 
     END IF;
     CLOSE getBatches;
-    LOGGING.tcplog('GROUP_TQBATCHES: CURSOR CLOSED');
+    Log('GROUP_TQBATCHES: CURSOR CLOSED');
     RETURN;
     EXCEPTION
       WHEN NO_DATA_NEEDED THEN 
-        LOGGING.tcplog('GROUP_TQBATCHES START: no_data_needed');
+        Log('GROUP_TQBATCHES START: no_data_needed');
         IF(getBatches%ISOPEN) THEN 
           CLOSE getBatches; 
-          LOGGING.tcplog('GROUP_TQBATCHES: CURSOR CLOSED');
+          Log('GROUP_TQBATCHES: CURSOR CLOSED');
         END IF;
         --RAISE;    
         RETURN;
@@ -146,9 +204,9 @@
         BEGIN
           IF(getBatches%ISOPEN) THEN 
             CLOSE getBatches; 
-            LOGGING.tcplog('GROUP_TQBATCHES: CURSOR CLOSED');
+            Log('GROUP_TQBATCHES: CURSOR CLOSED');
           END IF;
-          LOGGING.tcplog('GROUP_TQBATCHES ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
+          Log('GROUP_TQBATCHES ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
           RAISE;
         END;
   END GROUP_TQBATCHES;
@@ -170,31 +228,31 @@
     tqStub TQSTUBS_OBJ;
     piped PLS_INTEGER := 0;
   BEGIN
-    LOGGING.tcplog('QUERY_BATCHES START: THREAD:' || threadMod || ',rowLimit:' || rowLimit || ',threadCount:' || threadCount || ',bucketSize:' || bucketSize);
+    Log('QUERY_BATCHES START: THREAD:' || threadMod || ',rowLimit:' || rowLimit || ',threadCount:' || threadCount || ',bucketSize:' || bucketSize);
     OPEN pipeBatches;
-    LOGGING.tcplog('QUERY_BATCHES: CURSOR OPENED');
+    Log('QUERY_BATCHES: CURSOR OPENED');
     LOOP
       FETCH pipeBatches into tqStub;
       EXIT WHEN pipeBatches%NOTFOUND;
       PIPE ROW(tqStub);    
       piped := piped + 1;
-      LOGGING.tcplog('QUERY_BATCHES PIPED:' || piped);                
+      Log('QUERY_BATCHES PIPED:' || piped);                
     END LOOP;
-    LOGGING.tcplog('QUERY_BATCHES: END LOOP');
+    Log('QUERY_BATCHES: END LOOP');
     CLOSE pipeBatches;
-    LOGGING.tcplog('QUERY_BATCHES: CURSOR CLOSED');
+    Log('QUERY_BATCHES: CURSOR CLOSED');
     RETURN;
     EXCEPTION
       WHEN NO_DATA_NEEDED THEN 
-        LOGGING.tcplog('QUERY_BATCHES: NO_DATA_NEEDED');
+        Log('QUERY_BATCHES: NO_DATA_NEEDED');
         IF(pipeBatches%ISOPEN) THEN CLOSE pipeBatches; END IF;
         --RAISE; 
         RETURN;
       WHEN OTHERS THEN 
         IF(pipeBatches%ISOPEN) THEN CLOSE pipeBatches; END IF;
-        RAISE;    
-        
+        RAISE;            
   END QUERY_BATCHES;
+  
   
   FUNCTION GET_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR IS 
     arr TQUEUE_OBJ_ARR;
@@ -208,6 +266,139 @@
     RETURN arr;
   END;
   
+  
+--=============================================================================================================  
+-- Enriches each passed trade supplied in the cursor with the account id and pipes the enriched trades out
+--=============================================================================================================  
+  FUNCTION XENRICH_TRADE_ACCOUNTS(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE IS 
+    trade TQUEUE_REC;
+  BEGIN
+    LOOP
+      FETCH p into trade;
+      EXIT WHEN p%NOTFOUND;
+      DECODE_ACCOUNT(trade.ACCOUNT_DISPLAY_NAME, trade.ACCOUNT_ID);
+      PIPE ROW (trade);      
+    END LOOP;
+    RETURN;
+    EXCEPTION
+      WHEN NO_DATA_NEEDED THEN RETURN;
+  END XENRICH_TRADE_ACCOUNTS;
+  
+--=============================================================================================================  
+-- Enriches each passed trade supplied in the cursor with the security id and security type and pipes the enriched trades out
+--=============================================================================================================  
+  FUNCTION XENRICH_TRADE_SECURITIES(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE IS 
+    trade TQUEUE_REC;
+  BEGIN
+    LOOP
+      FETCH p into trade;
+      EXIT WHEN p%NOTFOUND;
+      DECODE_SECURITY(trade.SECURITY_DISPLAY_NAME, trade.SECURITY_ID, trade.SECURITY_TYPE);
+      PIPE ROW (trade);      
+    END LOOP;
+    RETURN;
+    EXCEPTION
+      WHEN NO_DATA_NEEDED THEN RETURN;
+  END XENRICH_TRADE_SECURITIES;
+  
+  FUNCTION ROOT_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR IS
+    scur TQUEUE_REC_CUR;
+  BEGIN
+    OPEN scur FOR 
+      SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+      FROM TQUEUE T WHERE EXISTS (
+        SELECT RID FROM (
+          SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
+      ) WHERE RID = T.ROWID);
+    RETURN scur;
+  END ROOT_CURSOR;
+  
+  
+  
+  -- TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR 
+  
+--=============================================================================================================  
+-- Returns an open cursor to retrieve the trades for the passed TQUEUE XROWIDs
+--=============================================================================================================
+-- TO DO:  Embedd ENRICH CALLS INTO PIPE
+  FUNCTION PIPE_TRADES_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR IS
+    scur TQUEUE_REC_CUR;
+    
+  BEGIN
+    OPEN scur FOR 
+--      SELECT VALUE(T) FROM TABLE(
+--        CURSOR(SELECT * FROM TABLE(ENRICH_TRADE_ACCOUNTS(
+--          CURSOR(SELECT * FROM TABLE(ENRICH_TRADE_SECURITIES(
+--            CURSOR(
+--              SELECT TQUEUE_OBJ(ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE) obj 
+--              FROM TQUEUE T WHERE EXISTS (
+--                SELECT RID FROM (
+--                  SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
+--              ) WHERE RID = T.ROWID)
+--          )))
+--        )))
+--      ));
+                SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+                FROM TQUEUE T WHERE EXISTS (
+                  SELECT RID FROM (
+                    SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
+                ) WHERE RID = T.ROWID);
+
+--        SELECT T.* FROM TABLE(
+--          CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_ACCOUNTS(
+--            CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_SECURITIES(
+--              CURSOR(
+--                SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+--                FROM TQUEUE T WHERE EXISTS (
+--                  SELECT RID FROM (
+--                    SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
+--                ) WHERE RID = T.ROWID)              
+--              )
+--            )))
+--          )))
+--        ) T;
+    
+--    SELECT TQUEUE_OBJ(ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE) obj 
+--      FROM TQUEUE T WHERE EXISTS (
+--      SELECT RID FROM (
+--        SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
+--      ) WHERE RID = T.ROWID
+--    );
+    return scur;    
+  END PIPE_TRADES_CURSOR;
+  
+--=============================================================================================================  
+-- Enriches each passed trade with the account id and pipes the enriched trades out
+--=============================================================================================================  
+  FUNCTION ENRICH_TRADE_ACCOUNTS(trades IN TQUEUE_OBJ_ARR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
+    trade TQUEUE_OBJ;
+  BEGIN
+    FOR i IN trades.FIRST..trades.LAST LOOP
+      trade := trades(i);
+      DECODE_ACCOUNT(trade.ACCOUNT_DISPLAY_NAME, trade.ACCOUNT_ID);
+      PIPE ROW (trade);
+    END LOOP;
+    RETURN;
+  END ENRICH_TRADE_ACCOUNTS;
+  
+--=============================================================================================================  
+-- Enriches each passed trade with the security id and security type and pipes the enriched trades out
+--=============================================================================================================  
+  FUNCTION ENRICH_TRADE_SECURITIES(trades IN TQUEUE_OBJ_ARR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
+    trade TQUEUE_OBJ;
+  BEGIN
+    FOR i IN trades.FIRST..trades.LAST LOOP
+      trade := trades(i);
+      DECODE_SECURITY(trade.SECURITY_DISPLAY_NAME, trade.SECURITY_ID, trade.SECURITY_TYPE);
+      PIPE ROW (trade);
+    END LOOP;
+    RETURN;
+  END ENRICH_TRADE_SECURITIES;
+  
+  
+--=============================================================================================================  
+-- Pipes out all trades matching the passed TQUEUE XROWIDs
+--=============================================================================================================  
   FUNCTION PIPE_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
     arr TQUEUE_OBJ_ARR;
   BEGIN
@@ -222,6 +413,18 @@
     END LOOP;
   END;
   
+--=============================================================================================================  
+-- Deletes all TQSTUBS matching the passed TQUEUE XROWIDs
+--=============================================================================================================  
+  FUNCTION DELETE_STUB_BATCH(xrowids IN XROWIDS) RETURN NUMBER IS  
+  BEGIN
+    DELETE FROM TQSTUBS T WHERE EXISTS (
+      SELECT RID FROM (
+        SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
+      ) WHERE RID = T.ROWID
+    );
+    RETURN SQL%ROWCOUNT;
+  END DELETE_STUB_BATCH;
   
   -- MOD(ORA_HASH(ACCOUNT_ID, 999999),12) = 3 
   
@@ -256,5 +459,3 @@
 
 
 end tq;
-
-/
