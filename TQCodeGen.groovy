@@ -193,6 +193,16 @@ genTableSelect = { rowid, xrowid, prefix, tableName ->
 	return b.toString();
 }
 
+genObjToTabUpdate = { prefix, tableName ->
+	meta = getTabMeta(tableName);
+	b = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+	meta.values().each() { m ->
+		b.append("\n").append(m.cname).append("=").append(prefix).append(m.cname).append(",");
+	}
+	b.deleteCharAt(b.length()-1);
+	b.append("\nWHERE ROWID = CHARTOROWID(").append(prefix).append("XROWID)");
+	return b.toString();
+}
 
 
 /*
@@ -212,13 +222,15 @@ println genObject(true, true, false, "SECURITY");
 */
 
 
-println genTableSelect(true, true, "", "TQUEUE");
+//println genTableSelect(true, true, "", "TQUEUE");
 
 //println genTableParams(true, false, "IN", "", "TQUEUE");
 
 
 //println genPipeRecsIntoObjects(true, "TQSTUBS");
+//println genPipeRecsIntoObjects(true, "TQUEUE");
 
 //println genTableParams(true, false, "IN", "", "TQSTUBS");
-//println genTableParams(true, false, "IN", "", "TQUEUE");
+//println genTableSelect(true, false, "rec.", "TQUEUE");
+println genObjToTabUpdate("trades(i).", "TQUEUE");
 

@@ -1,6 +1,6 @@
 create or replace PACKAGE TQ /* authid current_user */ as 
   -- Enablement flag for tcp logging
-  TCPLOG_ENABLED BOOLEAN := FALSE;
+  TCPLOG_ENABLED BOOLEAN := TRUE;
   
   TYPE StreamCursorTyp IS REF CURSOR;
   
@@ -77,6 +77,7 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
   TYPE CQNDECODE IS TABLE OF VARCHAR2(30) INDEX BY PLS_INTEGER;
   
   
+  
 
 --=========================================================================
 -- Converts TQUEUE Records to TQUEUE Objects
@@ -123,24 +124,28 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
   
   FUNCTION PIPE_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE;
   
+  FUNCTION PARSE_PIPE_TRADE_BATCH(xrowidStr IN VARCHAR2) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE;
+  
   FUNCTION DELETE_STUB_BATCH(xrowids IN XROWIDS) RETURN NUMBER;
-  
---=============================================================================================================  
--- Returns an open cursor to retrieve the trades for the passed TQUEUE XROWIDs
---=============================================================================================================
-  FUNCTION PIPE_TRADES_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR;
-  
   
   
   FUNCTION ROOT_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR;
+
 --=============================================================================================================  
--- Enriches each passed trade supplied in the cursor with the account id and pipes the enriched trades out
+-- Enriches each passed trade supplied in the cursor with the security id, security type 
+-- and account id then pipes the enriched trades out
 --=============================================================================================================  
-  FUNCTION XENRICH_TRADE_ACCOUNTS(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE;
+  FUNCTION XENRICH_TRADE(p IN TQUEUE_REC_CUR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID));
+  
 --=============================================================================================================  
--- Enriches each passed trade supplied in the cursor with the security id and security type and pipes the enriched trades out
+-- Updates rows in TQUEUE from the passed TQUEUE_OBJs
 --=============================================================================================================  
-  FUNCTION XENRICH_TRADE_SECURITIES(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE;
+  PROCEDURE UPDATE_TRADES(trades IN TQUEUE_OBJ_ARR);  
+  
+  -- *******************************************************
+  --    Attempts to lock the rows in TQUEUE
+  -- *******************************************************
+  FUNCTION LOCKTRADES(xrowids IN XROWIDS) RETURN PLS_INTEGER;  
   
   
   

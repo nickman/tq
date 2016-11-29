@@ -1,27 +1,11 @@
 create or replace PACKAGE BODY TQ as
 
-    cursor sqx(xrowids IN XROWIDS) is SELECT TQUEUE_OBJ(V) FROM TABLE (
-      CURSOR(SELECT * FROM TABLE(TQUEUE_RECS_TO_OBJS(
-            CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_ACCOUNTS(
-              CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_SECURITIES(
-                CURSOR(
-                  SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
-                  FROM TQUEUE T WHERE EXISTS (
-                    SELECT RID FROM (
-                      SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS)
-                  ) WHERE RID = T.ROWID)              
-                )
-              )))
-            )))
-          )))
-    )V;
-
 
   PROCEDURE log(message IN VARCHAR2) IS
   BEGIN
-    IF(TCPLOG_ENABLED) THEN
+    --IF(TCPLOG_ENABLED) THEN
       LOGGING.tcplog(message);
-    END IF;
+   -- END IF;
   END log;
 
   PROCEDURE SET_TCPLOG_ENABLED(enabled IN PLS_INTEGER) IS
@@ -49,7 +33,7 @@ create or replace PACKAGE BODY TQ as
       LOOP
         FETCH p into rec;
         EXIT WHEN p%NOTFOUND;
-        PIPE ROW(TQUEUE_OBJ(rec.XROWID,rec.TQUEUE_ID,rec.XID,rec.STATUS_CODE,rec.SECURITY_DISPLAY_NAME,rec.ACCOUNT_DISPLAY_NAME,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.CREATE_TS,rec.UPDATE_TS,rec.ERROR_MESSAGE));
+        PIPE ROW(TQUEUE_OBJ(rec.XROWID,rec.TQUEUE_ID,rec.XID,rec.STATUS_CODE,rec.SECURITY_DISPLAY_NAME,rec.ACCOUNT_DISPLAY_NAME,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.CREATE_TS,rec.UPDATE_TS,rec.ERROR_MESSAGE, null));
       END LOOP;
       RETURN;
       EXCEPTION        
@@ -184,6 +168,7 @@ create or replace PACKAGE BODY TQ as
       PIPE ROW(tqb);
       piped := piped + 1;
       Log('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows); 
+      tqb := NULL;
     END IF;
     CLOSE getBatches;
     Log('GROUP_TQBATCHES: CURSOR CLOSED');
@@ -220,11 +205,6 @@ create or replace PACKAGE BODY TQ as
     CURSOR pipeBatches IS 
       SELECT TQSTUBS_OBJ(ROWIDTOCHAR(ROWID), ROWIDTOCHAR(TQROWID),TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,BATCH_TS)
         FROM TQSTUBS T WHERE MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID;
-      
---      SELECT VALUE(X) FROM TABLE(TQSTUBS_RECS_TO_OBJS(CURSOR(
---        SELECT T.ROWID, T.* FROM TQSTUBS T WHERE MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID
---      ))) X;
-      -- PIPE ROW(TQSTUBS_OBJ(rec.XROWID,rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS));
     tqStub TQSTUBS_OBJ;
     piped PLS_INTEGER := 0;
   BEGIN
@@ -257,7 +237,7 @@ create or replace PACKAGE BODY TQ as
   FUNCTION GET_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR IS 
     arr TQUEUE_OBJ_ARR;
   BEGIN
-    SELECT TQUEUE_OBJ(ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE) 
+    SELECT TQUEUE_OBJ(ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE, NULL) 
       BULK COLLECT INTO arr FROM TQUEUE T WHERE EXISTS (
       SELECT RID FROM (
         SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
@@ -266,40 +246,32 @@ create or replace PACKAGE BODY TQ as
     RETURN arr;
   END;
   
+  FUNCTION MYSID RETURN VARCHAR2 IS
+    sid VARCHAR2(12);
+  BEGIN
+    SELECT SYS_CONTEXT('USERENV', 'SID') INTO sid FROM DUAL;
+    RETURN sid;
+  END MYSID;
   
 --=============================================================================================================  
--- Enriches each passed trade supplied in the cursor with the account id and pipes the enriched trades out
+-- Enriches each passed trade supplied in the cursor with the security id, security type 
+-- and account id then pipes the enriched trades out
 --=============================================================================================================  
-  FUNCTION XENRICH_TRADE_ACCOUNTS(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE IS 
-    trade TQUEUE_REC;
+  FUNCTION XENRICH_TRADE(p IN TQUEUE_REC_CUR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID)) IS
+    rec TQUEUE_REC;
   BEGIN
     LOOP
-      FETCH p into trade;
+      FETCH p into rec;
       EXIT WHEN p%NOTFOUND;
-      DECODE_ACCOUNT(trade.ACCOUNT_DISPLAY_NAME, trade.ACCOUNT_ID);
-      PIPE ROW (trade);      
+      DECODE_SECURITY(rec.SECURITY_DISPLAY_NAME, rec.SECURITY_ID, rec.SECURITY_TYPE);
+      DECODE_ACCOUNT(rec.ACCOUNT_DISPLAY_NAME, rec.ACCOUNT_ID);
+      PIPE ROW (TQUEUE_OBJ(rec.XROWID,rec.TQUEUE_ID,rec.XID,rec.STATUS_CODE,rec.SECURITY_DISPLAY_NAME,rec.ACCOUNT_DISPLAY_NAME,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.CREATE_TS,rec.UPDATE_TS,rec.ERROR_MESSAGE, NULL));      
     END LOOP;
     RETURN;
     EXCEPTION
-      WHEN NO_DATA_NEEDED THEN RETURN;
-  END XENRICH_TRADE_ACCOUNTS;
+      WHEN NO_DATA_NEEDED THEN NULL;  
+  END XENRICH_TRADE;
   
---=============================================================================================================  
--- Enriches each passed trade supplied in the cursor with the security id and security type and pipes the enriched trades out
---=============================================================================================================  
-  FUNCTION XENRICH_TRADE_SECURITIES(p IN TQUEUE_REC_CUR) RETURN TQUEUE_REC_ARR PIPELINED PARALLEL_ENABLE IS 
-    trade TQUEUE_REC;
-  BEGIN
-    LOOP
-      FETCH p into trade;
-      EXIT WHEN p%NOTFOUND;
-      DECODE_SECURITY(trade.SECURITY_DISPLAY_NAME, trade.SECURITY_ID, trade.SECURITY_TYPE);
-      PIPE ROW (trade);      
-    END LOOP;
-    RETURN;
-    EXCEPTION
-      WHEN NO_DATA_NEEDED THEN RETURN;
-  END XENRICH_TRADE_SECURITIES;
   
   FUNCTION ROOT_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR IS
     scur TQUEUE_REC_CUR;
@@ -314,103 +286,115 @@ create or replace PACKAGE BODY TQ as
   END ROOT_CURSOR;
   
   
-  
-  -- TQSTUBS_RECS_TO_OBJS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_OBJ_ARR 
-  
---=============================================================================================================  
--- Returns an open cursor to retrieve the trades for the passed TQUEUE XROWIDs
---=============================================================================================================
--- TO DO:  Embedd ENRICH CALLS INTO PIPE
-  FUNCTION PIPE_TRADES_CURSOR(xrowids IN XROWIDS) RETURN TQUEUE_REC_CUR IS
-    scur TQUEUE_REC_CUR;
-    
+  -- *******************************************************
+  --    Attempts to lock the rows in TQSTUBS
+  -- *******************************************************
+  FUNCTION LOCKTRADES(xrowids IN XROWIDS) RETURN PLS_INTEGER IS
+    tradeIds INT_ARR;
   BEGIN
-    OPEN scur FOR 
---      SELECT VALUE(T) FROM TABLE(
---        CURSOR(SELECT * FROM TABLE(ENRICH_TRADE_ACCOUNTS(
---          CURSOR(SELECT * FROM TABLE(ENRICH_TRADE_SECURITIES(
---            CURSOR(
---              SELECT TQUEUE_OBJ(ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE) obj 
---              FROM TQUEUE T WHERE EXISTS (
---                SELECT RID FROM (
---                  SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
---              ) WHERE RID = T.ROWID)
---          )))
---        )))
---      ));
-                SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
-                FROM TQUEUE T WHERE EXISTS (
-                  SELECT RID FROM (
-                    SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
-                ) WHERE RID = T.ROWID);
-
---        SELECT T.* FROM TABLE(
---          CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_ACCOUNTS(
---            CURSOR(SELECT * FROM TABLE(XENRICH_TRADE_SECURITIES(
---              CURSOR(
---                SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
---                FROM TQUEUE T WHERE EXISTS (
---                  SELECT RID FROM (
---                    SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
---                ) WHERE RID = T.ROWID)              
---              )
---            )))
---          )))
---        ) T;
-    
---    SELECT TQUEUE_OBJ(ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE) obj 
---      FROM TQUEUE T WHERE EXISTS (
---      SELECT RID FROM (
---        SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
---      ) WHERE RID = T.ROWID
---    );
-    return scur;    
-  END PIPE_TRADES_CURSOR;
+    SELECT TQUEUE_ID BULK COLLECT INTO tradeIds FROM TQUEUE T WHERE EXISTS (
+        SELECT RID FROM (
+          SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
+      ) WHERE RID = T.ROWID) FOR UPDATE;
+    RETURN tradeIds.COUNT;
+  END LOCKTRADES;
   
---=============================================================================================================  
--- Enriches each passed trade with the account id and pipes the enriched trades out
---=============================================================================================================  
-  FUNCTION ENRICH_TRADE_ACCOUNTS(trades IN TQUEUE_OBJ_ARR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
-    trade TQUEUE_OBJ;
+  FUNCTION XROWIDSPLIT(str IN VARCHAR2) RETURN XROWIDS IS 
+    l_idx    pls_integer;
+    l_list    varchar2(32767) := str;
+    l_value    varchar2(32767);  
   BEGIN
-    FOR i IN trades.FIRST..trades.LAST LOOP
-      trade := trades(i);
-      DECODE_ACCOUNT(trade.ACCOUNT_DISPLAY_NAME, trade.ACCOUNT_ID);
-      PIPE ROW (trade);
-    END LOOP;
-    RETURN;
-  END ENRICH_TRADE_ACCOUNTS;
-  
---=============================================================================================================  
--- Enriches each passed trade with the security id and security type and pipes the enriched trades out
---=============================================================================================================  
-  FUNCTION ENRICH_TRADE_SECURITIES(trades IN TQUEUE_OBJ_ARR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
-    trade TQUEUE_OBJ;
-  BEGIN
-    FOR i IN trades.FIRST..trades.LAST LOOP
-      trade := trades(i);
-      DECODE_SECURITY(trade.SECURITY_DISPLAY_NAME, trade.SECURITY_ID, trade.SECURITY_TYPE);
-      PIPE ROW (trade);
-    END LOOP;
-    RETURN;
-  END ENRICH_TRADE_SECURITIES;
-  
-  
+    RETURN NULL;
+  END;
 --=============================================================================================================  
 -- Pipes out all trades matching the passed TQUEUE XROWIDs
 --=============================================================================================================  
-  FUNCTION PIPE_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS 
-    arr TQUEUE_OBJ_ARR;
+  FUNCTION PARSE_PIPE_TRADE_BATCH(xrowidStr IN VARCHAR2) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS
+    v_array apex_application_global.vc_arr2;
+    x XROWIDS := NEW XROWIDS();
+    pipes PLS_INTEGER := 1;
+    cursor p is SELECT DISTINCT VALUE(V) FROM TABLE(XENRICH_TRADE(
+                  CURSOR(
+                    SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+                    FROM TQUEUE T WHERE EXISTS (
+                      SELECT RID FROM (
+                        SELECT DISTINCT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(x)
+                      ) 
+                      WHERE RID = T.ROWID
+                    )            
+                    ORDER BY TQUEUE_ID                     
+                  )
+                )
+      )V;
+      trade TQUEUE_OBJ;    
   BEGIN
-    FOR trade IN (
-    SELECT TQUEUE_OBJ(ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE) obj 
-      FROM TQUEUE T WHERE EXISTS (
-      SELECT RID FROM (
-        SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS) X
-      ) WHERE RID = T.ROWID
-    )) LOOP
-      PIPE ROW (trade.obj);
+    v_array := apex_util.string_to_table(xrowidStr, ',');    
+    x.extend(v_array.COUNT);
+    FOR i in v_array.FIRST..v_array.LAST LOOP
+      x(i) := ltrim(rtrim(v_array(i)));
+    END LOOP;    
+    log(MYSID() || ', Processing Trade Batch for [' || x.COUNT || '] ROWIDs');
+    OPEN p;
+    LOOP      
+      FETCH p into trade;
+      EXIT WHEN p%NOTFOUND;
+      log(MYSID() || ', TRADE OUT:' || pipes);
+      pipes := pipes + 1;
+      --LOCKTRADE(trade.XROWID);
+      PIPE ROW (trade);
     END LOOP;
+    log(MYSID() || ', END LOOP');
+    CLOSE p;
+    log(MYSID() || ', CLOSED CURSOR');
+    RETURN;
+    EXCEPTION
+      WHEN NO_DATA_NEEDED THEN 
+        log('PIPE_TRADE_BATCH: NO_DATA_NEEDED');
+        IF(p%ISOPEN) THEN CLOSE p; END IF;
+        NULL;
+      WHEN OTHERS THEN 
+        IF(p%ISOPEN) THEN CLOSE p; END IF;
+        RAISE;                
+  END  PARSE_PIPE_TRADE_BATCH;
+--=============================================================================================================  
+-- Pipes out all trades matching the passed TQUEUE XROWIDs
+--=============================================================================================================  
+-- FUNCTION XENRICH_TRADE(p IN TQUEUE_REC_CUR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID));
+  FUNCTION PIPE_TRADE_BATCH(xrowids IN XROWIDS) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE IS     
+    cursor p is SELECT VALUE(V) FROM TABLE(XENRICH_TRADE(
+                  CURSOR(
+                    SELECT ROWIDTOCHAR(ROWID),TQUEUE_ID,XID,STATUS_CODE,SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+                    FROM TQUEUE T WHERE EXISTS (
+                      SELECT RID FROM (
+                        SELECT CHARTOROWID(COLUMN_VALUE) AS RID FROM TABLE(XROWIDS)
+                      ) 
+                      WHERE RID = T.ROWID
+                    )            
+                    ORDER BY TQUEUE_ID                     
+                  )
+                )
+      )V;
+      trade TQUEUE_OBJ;
+      pipes PLS_INTEGER := 1;
+  BEGIN
+    OPEN p;
+    LOOP
+      FETCH p into trade;
+      EXIT WHEN p%NOTFOUND;      
+      --LOCKTRADE(trade.XROWID);
+      PIPE ROW (trade);
+      log(MYSID() || ', TRADE OUT:' || pipes);
+      pipes := pipes + 1;      
+    END LOOP;
+    RETURN;
+    EXCEPTION
+      WHEN NO_DATA_NEEDED THEN 
+        Log('PIPE_TRADE_BATCH: NO_DATA_NEEDED');
+        IF(p%ISOPEN) THEN CLOSE p; END IF;
+        NULL;
+      WHEN OTHERS THEN 
+        IF(p%ISOPEN) THEN CLOSE p; END IF;
+        RAISE;                
   END;
   
 --=============================================================================================================  
@@ -425,6 +409,23 @@ create or replace PACKAGE BODY TQ as
     );
     RETURN SQL%ROWCOUNT;
   END DELETE_STUB_BATCH;
+  
+--=============================================================================================================  
+-- Updates rows in TQUEUE from the passed TQUEUE_OBJs
+--=============================================================================================================  
+  PROCEDURE UPDATE_TRADES(trades IN TQUEUE_OBJ_ARR) IS
+    now TIMESTAMP := SYSTIMESTAMP;
+  BEGIN
+    FORALL i IN trades.FIRST..trades.LAST
+      UPDATE TQUEUE SET
+      STATUS_CODE='COMPLETE',
+      SECURITY_ID=trades(i).SECURITY_ID,
+      SECURITY_TYPE=trades(i).SECURITY_TYPE,
+      ACCOUNT_ID=trades(i).ACCOUNT_ID,
+      BATCH_ID=trades(i).BATCH_ID,
+      UPDATE_TS=now
+      WHERE ROWID = CHARTOROWID(trades(i).XROWID);      
+  END UPDATE_TRADES;
   
   -- MOD(ORA_HASH(ACCOUNT_ID, 999999),12) = 3 
   

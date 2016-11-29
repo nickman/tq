@@ -8,8 +8,8 @@ import oracle.jdbc.aq.*;
 String DRIVER = "oracle.jdbc.OracleDriver";
 //String URL = "jdbc:oracle:thin:@//leopard:1521/XE";
 //String URL = "jdbc:oracle:thin:@//tporacle:1521/ORCL";
-//String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
-String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
+String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
+//String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
 //String URL = "jdbc:oracle:thin:@//horacle:1521/cdb1";
 String USER = "tqreactor";
 String PASS = "tq";
@@ -81,7 +81,7 @@ sql.eachRow("SELECT SECURITY_DISPLAY_NAME FROM SECURITY", { securities.add(it.SE
 sql.eachRow("SELECT ACCOUNT_DISPLAY_NAME FROM ACCOUNT", { accounts.add(it.ACCOUNT_DISPLAY_NAME); });
 println "Caches Loaded";
 
-for(x in 0..5) {
+for(x in 0..10) {
     sql.withTransaction {
         sql.withBatch { st ->
             batchId = sql.firstRow("SELECT SEQ_TQBATCH_ID.NEXTVAL BATCH_ID FROM DUAL").BATCH_ID.toInteger();
