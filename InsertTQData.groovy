@@ -4,11 +4,14 @@ import groovy.sql.*;
 import java.sql.*;
 import oracle.jdbc.*;
 import oracle.jdbc.aq.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
 
 String DRIVER = "oracle.jdbc.OracleDriver";
 //String URL = "jdbc:oracle:thin:@//leopard:1521/XE";
 //String URL = "jdbc:oracle:thin:@//tporacle:1521/ORCL";
 String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
+//String URL = "jdbc:oracle:oci8:@";
 //String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
 //String URL = "jdbc:oracle:thin:@//horacle:1521/cdb1";
 String USER = "tqreactor";
@@ -81,61 +84,60 @@ sql.eachRow("SELECT SECURITY_DISPLAY_NAME FROM SECURITY", { securities.add(it.SE
 sql.eachRow("SELECT ACCOUNT_DISPLAY_NAME FROM ACCOUNT", { accounts.add(it.ACCOUNT_DISPLAY_NAME); });
 println "Caches Loaded";
 
-for(x in 0..10) {
-    sql.withTransaction {
-        sql.withBatch { st ->
-            batchId = sql.firstRow("SELECT SEQ_TQBATCH_ID.NEXTVAL BATCH_ID FROM DUAL").BATCH_ID.toInteger();
+//INSERT_SQL = """INSERT INTO TQUEUE VALUES(
+//                            SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID, 'PENDING',       --TQUEUE_ID,XID,STATUS_CODE,
+//                            '$s', '$a',                                             --SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,
+//                            NULL, NULL,                                             --SECURITY_ID,SECURITY_TYPE,
+//                            NULL, $batchId,                                         --ACCOUNT_ID, BATCH_ID
+//                            SYSDATE, NULL, NULL                                     --CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+//                            )""";
+//                            
+INSERT_SQL = """INSERT INTO TQUEUE VALUES(
+                            SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID, 'PENDING',       --TQUEUE_ID,XID,STATUS_CODE,
+                            ?, ?,                                             --SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,
+                            NULL, NULL,                                 --SECURITY_ID,SECURITY_TYPE,
+                            NULL, ?,                                       --ACCOUNT_ID, BATCH_ID
+                            SYSDATE, NULL, NULL                   --CREATE_TS,UPDATE_TS,ERROR_MESSAGE
+                            )""";
+                            
+
+int LOOPS = 100;
+int BATCHSIZE = 1000;
+int THREADS = 6;
+final CountDownLatch latch = new CountDownLatch(THREADS);
+final AtomicLong totalRows = new AtomicLong();
+for(thread in 1..THREADS) {
+    Thread.startDaemon("InsertDataThread#${thread}", {
+        tsql = Sql.newInstance(ds);
+        for(x in 1..LOOPS) {
             long start = System.currentTimeMillis();
-            for(i in 0..10000) {
-                s = randomSecurity();
-                a = randomAccount();
-                //  TQUEUE_ID,XID,STATUS_CODE,
-                // SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,
-                // SECURITY_ID,SECURITY_TYPE,
-                // ACCOUNT_ID,
-                // BATCH_ID,CREATE_TS,UPDATE_TS,ERROR_MESSAGE
-                st.execute("""INSERT INTO TQUEUE VALUES(
-                    SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID, 'PENDING',       --TQUEUE_ID,XID,STATUS_CODE,
-                    '$s', '$a',                                             --SECURITY_DISPLAY_NAME,ACCOUNT_DISPLAY_NAME,
-                    NULL, NULL,                                             --SECURITY_ID,SECURITY_TYPE,
-                    NULL, $batchId,                                         --ACCOUNT_ID, BATCH_ID
-                    SYSDATE, NULL, NULL                                     --CREATE_TS,UPDATE_TS,ERROR_MESSAGE
-                    )""");
-            }
+            tsql.withTransaction {                
+                batchId = tsql.firstRow("SELECT SEQ_TQBATCH_ID.NEXTVAL BATCH_ID FROM DUAL").BATCH_ID.toInteger();
+                tsql.withBatch(0, INSERT_SQL) { ps ->                                        
+                    for(i in 1..BATCHSIZE) {
+                        s = randomSecurity();
+                        a = randomAccount();
+                        ps.addBatch(s, a, batchId);
+                    }
+                    ps.executeBatch();
+                }    // END OF withBatch
+            }    // END OF withTransaction            
+            long total = totalRows.addAndGet(BATCHSIZE);
             long elapsed = System.currentTimeMillis() - start;
-            println "Inserted 10000 rows in $elapsed ms.";
-        }    
-    }
-    println "Completed Batch #$x";
+            println "[${Thread.currentThread().getName()}] Inserted $BATCHSIZE rows in $elapsed ms. Running Grand Total: $total";            
+         }    // END OF loops
+         latch.countDown();
+    });    // END OF startDaemon
+}    // ALL END
 
-// TQROWID       NOT NULL ROWID        
-// TQUEUE_ID     NOT NULL NUMBER(38)   
-// XID           NOT NULL RAW(8 BYTE)  
-// SECURITY_ID   NOT NULL NUMBER(38)   
-// SECURITY_TYPE NOT NULL CHAR(1)      
-// ACCOUNT_ID    NOT NULL NUMBER(38)   
-// BATCH_ID      NOT NULL NUMBER(38)   
-// BATCH_TS               TIMESTAMP(6) 
+println "Waiting on thread completion....";
+latch.await();
 
-//=====================================================================
-//=====================================================================
-// TQUEUE_ID             NOT NULL NUMBER(38)    
-// XID                   NOT NULL RAW(8 BYTE)   
-// STATUS_CODE           NOT NULL VARCHAR2(15)  
-// SECURITY_DISPLAY_NAME NOT NULL VARCHAR2(64)  
-// ACCOUNT_DISPLAY_NAME  NOT NULL VARCHAR2(36)  
-// SECURITY_ID                    NUMBER(38)    
-// SECURITY_TYPE                  CHAR(1)       
-// ACCOUNT_ID                     NUMBER(38)    
-// BATCH_ID                       NUMBER(38)    
-// CREATE_TS             NOT NULL DATE          
-// UPDATE_TS                      DATE          
-// ERROR_MESSAGE                  VARCHAR2(512) 
 
-}
+println "All Trades Inserted: ${totalRows.get()}";
 
-println "Trades Inserted";
-
+println "Gathering Stats for TQSTUBS";
+sql.execute("begin DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'TQSTUBS', estimate_percent => 100); end;");
 println "Gathering Stats for TQUEUE";
 sql.execute("begin DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'TQUEUE', estimate_percent => 100); end;");
 println "Gathering Stats for ACCOUNT";

@@ -135,7 +135,7 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
 -- Enriches each passed trade supplied in the cursor with the security id, security type 
 -- and account id then pipes the enriched trades out
 --=============================================================================================================  
-  FUNCTION XENRICH_TRADE(p IN TQUEUE_REC_CUR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID));
+  FUNCTION XENRICH_TRADE(p IN TQUEUE_REC_CUR) RETURN TQUEUE_OBJ_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID)) CLUSTER p BY (ACCOUNT_ID);
   
 --=============================================================================================================  
 -- Updates rows in TQUEUE from the passed TQUEUE_OBJs

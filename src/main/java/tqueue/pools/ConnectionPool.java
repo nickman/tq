@@ -25,6 +25,9 @@
 package tqueue.pools;
 
 import java.sql.Connection;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -39,11 +42,20 @@ import com.codahale.metrics.JmxReporter;
 import com.codahale.metrics.MetricRegistry;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import com.zaxxer.hikari.proxy.ConnectionProxy;
+import com.zaxxer.hikari.pool.ProxyConnection;
 
 import oracle.jdbc.OracleConnection;
 import oracle.sql.ArrayDescriptor;
-import tqueue.db.types.*;
+import tqueue.db.OracleAdapter;
+import tqueue.db.types.INT_ARR;
+import tqueue.db.types.TQBATCH;
+import tqueue.db.types.TQBATCH_ARR;
+import tqueue.db.types.TQSTUBS_OBJ;
+import tqueue.db.types.TQSTUBS_OBJ_ARR;
+import tqueue.db.types.TQUEUE_OBJ;
+import tqueue.db.types.TQUEUE_OBJ_ARR;
+import tqueue.db.types.VARCHAR2_ARR;
+import tqueue.db.types.XROWIDS;
 
 
 /**
@@ -114,7 +126,8 @@ public class ConnectionPool {
 		//config.setJdbcUrl("jdbc:oracle:thin:@//leopard:1521/XE");
 		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
 		config.setMetricRegistry(registry);
-		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		//config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/XE");
+		config.setJdbcUrl("jdbc:oracle:thin:@//localhost:1521/ORCL");
 		//config.setJdbcUrl("jdbc:oracle:thin:@(DESCRIPTION=(CONNECT_DATA=(SERVICE_NAME=ECS))(failover_mode=(type=select)(method=basic))(ADDRESS_LIST=(load_balance=off)(failover=on)(ADDRESS=(PROTOCOL=TCP)(HOST=10.5.202.163)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=10.5.202.161)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=10.5.202.162)(PORT=1521))))");
 		
 		
@@ -124,14 +137,27 @@ public class ConnectionPool {
 		config.addDataSourceProperty("prepStmtCacheSize", "250");
 		config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
 		config.setMaximumPoolSize(100);
-		config.setMinimumIdle(20);
+		config.setMinimumIdle(OracleAdapter.CORE_POOL_SIZE);
 		config.setConnectionTestQuery("SELECT SYSDATE FROM DUAL");
-		config.setConnectionTimeout(1002);
+		config.setConnectionTimeout(5002);
 		config.setAutoCommit(false);
 		config.setRegisterMbeans(true);
 		config.setPoolName("TQReactorPool");
 		dataSource = new HikariDataSource(config);
-		
+		dataSource.validate();
+		final List<Connection> conns = Collections.synchronizedList(new ArrayList<Connection>(OracleAdapter.CORE_POOL_SIZE));
+		try {
+			for(int i = 0; i < OracleAdapter.CORE_POOL_SIZE; i++) {
+				conns.add(dataSource.getConnection());
+			}
+			for(Connection conn: conns) {
+				conn.close();
+			}
+			conns.clear();
+			LOG.info("Pool Filled");
+		} catch (Exception ex) {
+			throw new RuntimeException("Failed to initialize pool", ex);
+		}
 		Connection conn = null;
 		try {
 			conn = dataSource.getConnection();
@@ -175,9 +201,9 @@ public class ConnectionPool {
 	
 	public static Connection unwrap(final Connection conn) {
 		if(conn==null) throw new IllegalArgumentException("The passed connection was null");
-		if(!ConnectionProxy.class.isInstance(conn)) throw new IllegalArgumentException("The passed connection of type [" + conn.getClass().getName() + "] is not a ConnectionProxy");
+		if(!ProxyConnection.class.isInstance(conn)) throw new IllegalArgumentException("The passed connection of type [" + conn.getClass().getName() + "] is not a ProxyConnection");
 		try {
-			return ((ConnectionProxy)conn).unwrap(Connection.class);
+			return ((ProxyConnection)conn).unwrap(Connection.class);
 		} catch (Exception e) {
 			LOG.error("Failed to unwrap connection", e);
 			throw new RuntimeException("Failed to unwrap connection", e);
@@ -186,9 +212,9 @@ public class ConnectionPool {
 	
 	public static <T extends Connection> T unwrap(final Connection conn, final Class<T> type) {
 		if(conn==null) throw new IllegalArgumentException("The passed connection was null");
-		if(!ConnectionProxy.class.isInstance(conn)) throw new IllegalArgumentException("The passed connection of type [" + conn.getClass().getName() + "] is not a ConnectionProxy");
+		if(!ProxyConnection.class.isInstance(conn)) throw new IllegalArgumentException("The passed connection of type [" + conn.getClass().getName() + "] is not a ProxyConnection");
 		try {
-			return ((ConnectionProxy)conn).unwrap(type);
+			return ((ProxyConnection)conn).unwrap(type);
 		} catch (Exception e) {
 			LOG.error("Failed to unwrap connection", e);
 			throw new RuntimeException("Failed to unwrap connection", e);
@@ -204,7 +230,7 @@ public class ConnectionPool {
 			LOG.info("Acquired Connection: type:[" + conn.getClass().getName() + "]");
 			String url = conn.getMetaData().getURL();
 			LOG.info("URL: [" + url + "]");
-			Connection oraConn = ((ConnectionProxy)conn).unwrap(Connection.class);
+			Connection oraConn = ((ProxyConnection)conn).unwrap(Connection.class);
 			LOG.info("Unwrapped Connection: type:[" + oraConn.getClass().getName() + "]");
 		} catch (Exception ex) {
 			LOG.error("Connection test failed", ex);
