@@ -30,22 +30,21 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import javax.sql.DataSource;
 
-import oracle.jdbc.OracleConnection;
-import oracle.sql.ArrayDescriptor;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import tqueue.db.localtypes.TQBATCH;
 //import tqueue.db.types.*;
-import tqueue.db.localtypes.TQSTUB;
-import tqueue.db.localtypes.TQTRADE;
 
 import com.codahale.metrics.JmxReporter;
 import com.codahale.metrics.MetricRegistry;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import com.zaxxer.hikari.proxy.ConnectionProxy;
+
+import oracle.jdbc.OracleConnection;
+import oracle.sql.ArrayDescriptor;
+import tqueue.db.types.*;
+
 
 /**
  * <p>Title: ConnectionPool</p>
@@ -93,15 +92,19 @@ public class ConnectionPool {
 		reporter = JmxReporter.forRegistry(registry).build();
 		reporter.start();
 		// ==== known type mappings 
-		typeMap.put(TQSTUB._SQL_NAME, TQSTUB.class);
-		typeMap.put("TQREACTOR.TQSTUB_ARR", TQSTUB[].class);
-//		typeMap.put(TQSTUB_ARR._SQL_NAME, TQSTUB_ARR.class);
-		typeMap.put(TQTRADE._SQL_NAME, TQTRADE.class);
-		typeMap.put("TQREACTOR.TQTRADE_ARR", TQTRADE[].class);
-//		typeMap.put(TQTRADE_ARR._SQL_NAME, TQTRADE_ARR.class);
+		typeMap.put(INT_ARR._SQL_NAME, INT_ARR.class);
+		typeMap.put(XROWIDS._SQL_NAME, XROWIDS.class);
+		typeMap.put(VARCHAR2_ARR._SQL_NAME, VARCHAR2_ARR.class);
+		
 		typeMap.put(TQBATCH._SQL_NAME, TQBATCH.class);
-//		typeMap.put(XROWIDS._SQL_NAME, XROWIDS.class);
-		typeMap.put("TQREACTOR.XROWIDS", String[].class);
+		typeMap.put(TQBATCH_ARR._SQL_NAME, TQBATCH_ARR.class);
+		//typeMap.put(TQBATCHRef._SQL_NAME, TQBATCHRef.class);
+		typeMap.put(TQSTUBS_OBJ._SQL_NAME, TQSTUBS_OBJ.class);
+		typeMap.put(TQSTUBS_OBJ_ARR._SQL_NAME, TQSTUBS_OBJ_ARR.class);
+		typeMap.put(TQUEUE_OBJ._SQL_NAME, TQUEUE_OBJ.class);
+		typeMap.put(TQUEUE_OBJ_ARR._SQL_NAME, TQUEUE_OBJ_ARR.class);
+		
+		
 
 		
 		// ==== known type mappings 
@@ -133,10 +136,10 @@ public class ConnectionPool {
 		try {
 			conn = dataSource.getConnection();
 			OracleConnection oconn = unwrap(conn, OracleConnection.class);
-			adMap.put(TQSTUB.class, ArrayDescriptor.createDescriptor("TQREACTOR.TQSTUB_ARR", oconn));
-			adMap.put(TQBATCH.class, ArrayDescriptor.createDescriptor("TQREACTOR.TQBATCH_ARR", oconn));			
-			adMap.put(TQTRADE.class, ArrayDescriptor.createDescriptor("TQREACTOR.TQTRADE_ARR", oconn, true, false));			
-			adMap.put(String.class, ArrayDescriptor.createDescriptor("TQREACTOR.XROWIDS", oconn, true, false));
+//			adMap.put(TQSTUB.class, ArrayDescriptor.createDescriptor("TQREACTOR.TQSTUB_ARR", oconn));
+//			adMap.put(TQBATCH.class, ArrayDescriptor.createDescriptor("TQREACTOR.TQBATCH_ARR", oconn));			
+//			adMap.put(TQTRADE.class, ArrayDescriptor.createDescriptor("TQREACTOR.TQTRADE_ARR", oconn, true, false));			
+//			adMap.put(String.class, ArrayDescriptor.createDescriptor("TQREACTOR.XROWIDS", oconn, true, false));
 		} catch (Exception ex) {
 			LOG.error("Failed getting ArrayDescriptors", ex);
 		} finally {
