@@ -3,9 +3,9 @@ create or replace PACKAGE BODY TQ as
 
   PROCEDURE log(message IN VARCHAR2) IS
   BEGIN
-    --IF(TCPLOG_ENABLED) THEN
+    IF(TCPLOG_ENABLED) THEN
       LOGGING.tcplog(message);
-   -- END IF;
+    END IF;
   END log;
 
   PROCEDURE SET_TCPLOG_ENABLED(enabled IN PLS_INTEGER) IS
@@ -426,6 +426,47 @@ create or replace PACKAGE BODY TQ as
       UPDATE_TS=now
       WHERE ROWID = CHARTOROWID(trades(i).XROWID);      
   END UPDATE_TRADES;
+  
+--=============================================================================================================  
+-- Updates rows in TQUEUE from the passed TQUEUE_OBJs and deletes the stubs
+--=============================================================================================================  
+  PROCEDURE COMPLETE_BATCH(trades IN TQUEUE_OBJ_ARR, xrowids IN XROWIDS) IS
+    drows INT;
+    now TIMESTAMP := SYSTIMESTAMP;
+  BEGIN    
+    FORALL i IN trades.FIRST..trades.LAST
+      UPDATE TQUEUE SET
+      STATUS_CODE='COMPLETE',
+      SECURITY_ID=trades(i).SECURITY_ID,
+      SECURITY_TYPE=trades(i).SECURITY_TYPE,
+      ACCOUNT_ID=trades(i).ACCOUNT_ID,
+      BATCH_ID=trades(i).BATCH_ID,
+      UPDATE_TS=now
+      WHERE ROWID = CHARTOROWID(trades(i).XROWID);   
+    drows := DELETE_STUB_BATCH(xrowids);
+  END COMPLETE_BATCH;
+  
+--=============================================================================================================  
+-- Updates rows in TQUEUE from the passed TQUEUE_OBJs and deletes the stubs
+--=============================================================================================================  
+  FUNCTION COMPLETE_BATCH_WCOUNTS(trades IN TQUEUE_OBJ_ARR, xrowids IN XROWIDS) RETURN INT_ARR IS
+    drows INT_ARR := NEW INT_ARR(0,0);
+    now TIMESTAMP := SYSTIMESTAMP;
+  BEGIN    
+    FORALL i IN trades.FIRST..trades.LAST
+      UPDATE TQUEUE SET
+      STATUS_CODE='COMPLETE',
+      SECURITY_ID=trades(i).SECURITY_ID,
+      SECURITY_TYPE=trades(i).SECURITY_TYPE,
+      ACCOUNT_ID=trades(i).ACCOUNT_ID,
+      BATCH_ID=trades(i).BATCH_ID,
+      UPDATE_TS=now
+      WHERE ROWID = CHARTOROWID(trades(i).XROWID);   
+    drows(2) := DELETE_STUB_BATCH(xrowids);
+    return drows;
+  END COMPLETE_BATCH_WCOUNTS;
+  
+  
   
   -- MOD(ORA_HASH(ACCOUNT_ID, 999999),12) = 3 
   

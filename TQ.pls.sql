@@ -1,6 +1,6 @@
 create or replace PACKAGE TQ /* authid current_user */ as 
   -- Enablement flag for tcp logging
-  TCPLOG_ENABLED BOOLEAN := TRUE;
+  TCPLOG_ENABLED BOOLEAN := FALSE;
   
   TYPE StreamCursorTyp IS REF CURSOR;
   
@@ -141,6 +141,18 @@ TYPE SECURITY_REC_CUR IS REF CURSOR RETURN SECURITY_REC;
 -- Updates rows in TQUEUE from the passed TQUEUE_OBJs
 --=============================================================================================================  
   PROCEDURE UPDATE_TRADES(trades IN TQUEUE_OBJ_ARR);  
+  
+--=============================================================================================================  
+-- Updates rows in TQUEUE from the passed TQUEUE_OBJs and deletes the stubs
+--=============================================================================================================  
+  PROCEDURE COMPLETE_BATCH(trades IN TQUEUE_OBJ_ARR, xrowids IN XROWIDS);  
+  
+--=============================================================================================================  
+-- Updates rows in TQUEUE from the passed TQUEUE_OBJs and deletes the stubs
+--=============================================================================================================  
+  FUNCTION COMPLETE_BATCH_WCOUNTS(trades IN TQUEUE_OBJ_ARR, xrowids IN XROWIDS) RETURN INT_ARR;
+  
+  
   
   -- *******************************************************
   --    Attempts to lock the rows in TQUEUE
