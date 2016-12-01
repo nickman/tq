@@ -28,7 +28,10 @@ import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -43,12 +46,14 @@ import com.codahale.metrics.ConsoleReporter;
 import com.codahale.metrics.Histogram;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
+import com.codahale.metrics.Snapshot;
 import com.codahale.metrics.Timer;
 import com.codahale.metrics.Timer.Context;
 
 import oracle.jdbc.OracleConnection;
 import tqueue.db.types.TQBATCH;
 import tqueue.db.types.TQUEUE_OBJ;
+import tqueue.db.types.TQUEUE_OBJ_ARR;
 import tqueue.pools.ConnectionPool;
 
 /**
@@ -65,7 +70,7 @@ public class OracleAdapter {
 	private final Logger log = LoggerFactory.getLogger(getClass());
 
 	/** The number of TQ threads to run */
-	public static final int CORE_POOL_SIZE = 12; //Runtime.getRuntime().availableProcessors();
+	public static final int CORE_POOL_SIZE = 3; //Runtime.getRuntime().availableProcessors();
 
 	public static final int MAX_BATCH_ROWS = 4096;
 	public static final int ORA_HASH_BUCKETS = 999999;
@@ -79,7 +84,8 @@ public class OracleAdapter {
 	public static final String POLL_BATCH_SQL = "SELECT VALUE(X) FROM TABLE(TQ.GROUP_TQBATCHES(?,?,?,?)) X";
 	public static final String RESOLVE_BATCH_SQL = "SELECT VALUE(T) FROM TABLE(TQ.PIPE_TRADE_BATCH(?)) T";
 	public static final String DELETE_BATCH_SQL = "BEGIN ? := TQ.DELETE_STUB_BATCH(?); END;";
-
+	public static final String UPDATE_TRADES_SQL = "BEGIN TQ.UPDATE_TRADES(?); END;";
+	
 
 
 	protected final ThreadFactory tf = new ThreadFactory() {
@@ -104,6 +110,10 @@ public class OracleAdapter {
 	protected final Meter stubRate = metricRegistry.meter("StubRate");
 	/** Batch resultset next() time */
 	protected final Timer nextBatchTimer = metricRegistry.timer("NextBatchTime"); 
+	/** Update trades timer */
+	protected final Timer updateTradesTimer = metricRegistry.timer("UpdateTradesTime"); 
+	/** Delete Stubs timer */
+	protected final Timer deleteStubsTimer = metricRegistry.timer("DeleteStubsTime"); 
 	
 
 	protected final ConsoleReporter reporter = ConsoleReporter.forRegistry(metricRegistry)
@@ -121,14 +131,37 @@ public class OracleAdapter {
 			oa.tpe.execute(oa.newTQRunnable(i));
 		}
 		while(true) {
+			oa.printHistogram(oa.batchSize, "BatchSize");
+			oa.printTimer(oa.nextBatchTimer, "NextBatch (micros)", TimeUnit.MICROSECONDS);
+			oa.printTimer(oa.updateTradesTimer, "UpdateTrades (ms)", TimeUnit.MILLISECONDS);
+			oa.printTimer(oa.deleteStubsTimer, "DeleteStubs (ms)", TimeUnit.MILLISECONDS);
 			oa.log.info("Last 1min Batch Rate: {}, Total: {}", (long)oa.batchRate.getOneMinuteRate(), oa.batchRate.getCount());
-			oa.log.info("Last 1min Stub Rate: {}, Total: {}\n======", (long)oa.stubRate.getOneMinuteRate(), oa.stubRate.getCount());
+			oa.log.info("Last 1min Stub Rate: {}, Total: {}", (long)oa.stubRate.getOneMinuteRate(), oa.stubRate.getCount());
+			System.out.println("===========");
 			try { Thread.currentThread().join(5000); } catch (Exception x) {/* No Op */}
 		}
 //		try { Thread.currentThread().join(); } catch (Exception x) {/* No Op */}
 //		oa.reporter.start(5, TimeUnit.SECONDS);
 //		oa.log.info("Console Reporter Started");
 	}
+	
+	public void printTimer(final Timer timer, final String name, final TimeUnit unit) {
+		final Snapshot snap = timer.getSnapshot();
+		final long ptile99 = unit.convert((long)snap.get99thPercentile(), TimeUnit.NANOSECONDS);
+		final long mean = unit.convert((long)snap.getMean(), TimeUnit.NANOSECONDS);
+		final long median = unit.convert((long)snap.getMedian(), TimeUnit.NANOSECONDS);
+		log.info("Timer [{}]: 99ptile:{}, mean:{}, median:{}", name, ptile99, mean, median);		
+	}
+	
+	public void printHistogram(final Histogram hist, final String name) {
+		final Snapshot snap = hist.getSnapshot();
+		final long min = snap.getMin();
+		final long max = snap.getMax();
+		final long mean = (long)snap.getMean();
+		log.info("Hist [{}]: min:{}, max:{}, mean:{}", name, min, max, mean);		
+	}
+	
+	
 
 	/**
 	 * Creates a TQ processor runnable
@@ -146,6 +179,7 @@ public class OracleAdapter {
 				PreparedStatement resolvePs = null;
 				ResultSet resolveRset = null;
 				CallableStatement csDeleteBatch = null;
+				CallableStatement csUpdateTrades = null;
 				try {
 					conn = ConnectionPool.getInstance().getConnection();
 					oraConn = ConnectionPool.unwrap(conn, OracleConnection.class);
@@ -154,6 +188,7 @@ public class OracleAdapter {
 					final long start = System.currentTimeMillis();
 					while(tqProcessorActive.get()) {
 						try {
+							csUpdateTrades = conn.prepareCall(UPDATE_TRADES_SQL);
 							csDeleteBatch = conn.prepareCall(DELETE_BATCH_SQL);
 							resolvePs = conn.prepareStatement(RESOLVE_BATCH_SQL);
 							batchPs = conn.prepareStatement(POLL_BATCH_SQL);
@@ -172,23 +207,39 @@ public class OracleAdapter {
 								ctx.stop();
 								batchCount++;
 								final TQBATCH batch = batchRset.getObject(1, TQBATCH.class);
-								batchSize.update(batch.getTcount());
+								final int tradeCount = batch.getTcount();
+								batchSize.update(tradeCount);
 								batches++;
 								//log.info("BATCH: {}", batch);
+								
 								resolvePs.setObject(1, batch.getTqrowids());
 								resolveRset = resolvePs.executeQuery();
+								final List<TQUEUE_OBJ> tradeBatch = new ArrayList<TQUEUE_OBJ>(tradeCount); 
 								while(resolveRset.next()) {
 									final TQUEUE_OBJ trade = resolveRset.getObject(1, TQUEUE_OBJ.class);
+									trade.setStatusCode("CLEARED");
 									trades++;
-									//log.info("\nTRADE: {}", trade);
-									trade.release();
+									tradeBatch.add(trade);
 								}
+								final TQUEUE_OBJ_ARR tradeArr = new TQUEUE_OBJ_ARR(tradeBatch.toArray(new TQUEUE_OBJ[tradeCount]));
+								csUpdateTrades.setObject(1, tradeArr);
+								Context cstx = updateTradesTimer.time();
+								csUpdateTrades.execute();
+								cstx.close();								
 								csDeleteBatch.registerOutParameter(1, Types.NUMERIC);
 								csDeleteBatch.setObject(2, batch.getRowids());
+								cstx = deleteStubsTimer.time();
 								csDeleteBatch.execute();
-								final int tcount = batch.getTcount();
+								cstx.close();								
 								batchRate.mark();
-								stubRate.mark(tcount);
+								stubRate.mark(tradeCount);
+								tradeBatch.parallelStream().forEach(t -> {
+									try {
+										t.release();
+									} catch (SQLException e) {
+									}
+								});
+								tradeBatch.clear();
 								batch.release();								
 							}
 							conn.commit();
@@ -202,6 +253,8 @@ public class OracleAdapter {
 							if(resolveRset!=null) try { resolveRset.close(); } catch (Exception x) {/* No Op */}
 							if(batchPs!=null) try { batchPs.close(); } catch (Exception x) {/* No Op */}							
 							if(resolvePs!=null) try { resolvePs.close(); } catch (Exception x) {/* No Op */}
+							if(csUpdateTrades!=null) try { csUpdateTrades.close(); } catch (Exception x) {/* No Op */}
+							if(csDeleteBatch!=null) try { csDeleteBatch.close(); } catch (Exception x) {/* No Op */}
 						}
 					}
 					final long elapsed = System.currentTimeMillis() - start;
