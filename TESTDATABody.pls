@@ -35,6 +35,14 @@ create or replace PACKAGE BODY TESTDATA AS
         raise;
       END;
   END RANDOMSEC;
+  
+  FUNCTION RANDOMSECS(cnt IN PLS_INTEGER) RETURN SEC_DECODE_ARR PIPELINED IS
+  BEGIN
+    FOR i in 1..cnt LOOP
+      PIPE ROW(RANDOMSEC());
+    END LOOP;
+    RETURN;
+  END RANDOMSECS;
 --
   -- *******************************************************
   --    Returns a random account
@@ -99,24 +107,38 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   -- *******************************************************
   PROCEDURE GENTRADES(tradeCount IN NUMBER DEFAULT 1000) IS
     account ACCT_DECODE;
-    security SEC_DECODE;
+    securities SEC_DECODE_ARR;
     noOfTrades INT := 0;
+    batchId NUMBER;
     done INT := 0;
   BEGIN
-
-    FOR i in 1..tradeCount LOOP
-      IF done = tradeCount THEN EXIT; END IF;
       account := RANDOMACCT;
-      noOfTrades := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, 10));
+      IF(tradeCount < 1) THEN
+        noOfTrades := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, 200));
+      ELSE 
+        noOfTrades := tradeCount;
+      END IF;
       IF noOfTrades = 0 THEN noOfTrades := 1; END IF;
-      FOR x in 1..noOfTrades LOOP
-        security := RANDOMSEC;
+      SELECT SEQ_TQBATCH_ID.NEXTVAL INTO batchId from DUAL;
+      SELECT VALUE(T) BULK COLLECT INTO securities FROM TABLE(RANDOMSECS(noOfTrades)) T;
+        
+      FORALL i in 1..noOfTrades
         INSERT INTO TQUEUE
-          VALUES(SEQ_TQUEUE_ID.NEXTVAL, tqv.CURRENTXID, 'PENDING',  security.SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
-        done := done + 1;
-        IF done = tradeCount THEN EXIT; END IF;
-      END LOOP;
-    END LOOP;
+          VALUES(SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID(), 'PENDING',  securities(i).SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, batchId, SYSDATE, NULL, NULL);
+
+--    FOR i in 1..tradeCount LOOP
+--      IF done = tradeCount THEN EXIT; END IF;
+--      account := RANDOMACCT;
+--      noOfTrades := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, 10));
+--      IF noOfTrades = 0 THEN noOfTrades := 1; END IF;
+--      FOR x in 1..noOfTrades LOOP
+--        security := RANDOMSEC;
+--        INSERT INTO TQUEUE
+--          VALUES(SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID(), 'PENDING',  security.SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
+--        done := done + 1;
+--        IF done = tradeCount THEN EXIT; END IF;
+--      END LOOP;
+--    END LOOP;
     COMMIT;
   END GENTRADES;
 --
@@ -210,4 +232,3 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   BEGIN
     LOADCACHES;
 END TESTDATA;
-/
