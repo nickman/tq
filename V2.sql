@@ -130,33 +130,216 @@ select count(distinct ORA_HASH(ACCOUNT_ID, 999999)), count(distinct ACCOUNT_ID) 
   END TRIGGER_STUB;
 
 
-create or replace TRIGGER STUB_REPLICATION_TRG 
+create or replace TRIGGER STUB_REPLICATION_TRG
 AFTER INSERT ON TQUEUE 
 REFERENCING OLD AS OLD NEW AS NEW 
 FOR EACH ROW 
 BEGIN
-  TQV.TRIGGER_STUB(:NEW.ROWID, :NEW.TQUEUE_ID, :NEW.STATUS_CODE, :NEW.SECURITY_DISPLAY_NAME, :NEW.ACCOUNT_DISPLAY_NAME, :NEW.BATCH_ID);
+  TQ.TRIGGER_STUB(:NEW.ROWID, :NEW.TQUEUE_ID, :NEW.STATUS_CODE, :NEW.SECURITY_DISPLAY_NAME, :NEW.ACCOUNT_DISPLAY_NAME, :NEW.BATCH_ID);
 END;
 
 -- TODO: calc diff on inserts with trigger vs. without
 
 
 CREATE VIEW RC AS 
-SELECT 'REHANDLERS' as "TABLE", COUNT(*) as "ROWS" FROM REHANDLERS
-UNION ALL
 SELECT 'ACCOUNT' as "TABLE", COUNT(*) as "ROWS" FROM ACCOUNT
 UNION ALL
 SELECT 'SECURITY' as "TABLE", COUNT(*) as "ROWS" FROM SECURITY
 UNION ALL
-SELECT 'ORDERS' as "TABLE", COUNT(*) as "ROWS" FROM ORDERS
-UNION ALL
-SELECT 'ORDERITEMS' as "TABLE", COUNT(*) as "ROWS" FROM ORDERITEMS
-UNION ALL
-SELECT 'EVENT' as "TABLE", COUNT(*) as "ROWS" FROM EVENT
-UNION ALL
 SELECT 'TQSTUBS' as "TABLE", COUNT(*) as "ROWS" FROM TQSTUBS
 UNION ALL
-SELECT 'POSACCT' as "TABLE", COUNT(*) as "ROWS" FROM POSACCT
-UNION ALL
 SELECT 'TQUEUE' as "TABLE", COUNT(*) as "ROWS" FROM TQUEUE
-ORDER BY 2 DESC
+
+
+
+CREATE OR REPLACE TRIGGER XROWID_TRG 
+AFTER INSERT ON TQSTUBS 
+REFERENCING NEW AS NEW 
+FOR EACH ROW 
+BEGIN
+  --:NEW.XROWID := ROWIDTOCHAR(:NEW.ROWID);
+  UPDATE TQSTUBS SET XROWID = ROWIDTOCHAR(:NEW.ROWID) WHERE ROWID = :NEW.ROWID;
+END;
+
+CREATE TABLE parallel_test (
+  id           NUMBER(10),
+  country_code VARCHAR2(5),
+  description  VARCHAR2(50)
+);
+
+INSERT /*+ APPEND */ INTO parallel_test
+SELECT level AS id,
+       (CASE TRUNC(MOD(level, 4))
+         WHEN 1 THEN 'IN'
+         WHEN 2 THEN 'UK'
+         ELSE 'US'
+        END) AS country_code,
+       'Description or ' || level AS description
+FROM   dual
+CONNECT BY level <= 100000;
+COMMIT;
+
+create or replace PACKAGE parallel_ptf_api AS
+
+  TYPE t_parallel_test_row IS RECORD (
+    id             NUMBER(10),
+    country_code   VARCHAR2(5),
+    description    VARCHAR2(50),
+    sid            NUMBER
+  );
+
+  TYPE t_parallel_test_tab IS TABLE OF t_parallel_test_row;
+
+  TYPE t_parallel_test_ref_cursor IS REF CURSOR RETURN parallel_test%ROWTYPE;
+  
+  FUNCTION test_ptf_any (p_cursor  IN  t_parallel_test_ref_cursor)
+    RETURN t_parallel_test_tab PIPELINED
+    PARALLEL_ENABLE(PARTITION p_cursor BY ANY);
+    
+  FUNCTION test_ptf_hash (p_cursor  IN  t_parallel_test_ref_cursor)
+    RETURN t_parallel_test_tab PIPELINED
+    PARALLEL_ENABLE(PARTITION p_cursor BY HASH (country_code));
+    
+  FUNCTION test_ptf_range (p_cursor  IN  t_parallel_test_ref_cursor)
+    RETURN t_parallel_test_tab PIPELINED
+    PARALLEL_ENABLE(PARTITION p_cursor BY RANGE (country_code));
+    
+END parallel_ptf_api;
+
+
+
+
+create or replace PACKAGE BODY parallel_ptf_api AS
+
+  FUNCTION test_ptf_any (p_cursor  IN  t_parallel_test_ref_cursor)
+    RETURN t_parallel_test_tab PIPELINED
+    PARALLEL_ENABLE(PARTITION p_cursor BY ANY)
+  IS
+    l_row  t_parallel_test_row;
+  BEGIN
+    LOOP
+      FETCH p_cursor
+      INTO  l_row.id,
+            l_row.country_code,
+            l_row.description;
+      EXIT WHEN p_cursor%NOTFOUND;
+      
+      SELECT sid
+      INTO   l_row.sid
+      FROM   v$mystat
+      WHERE  rownum = 1;
+      
+      PIPE ROW (l_row);
+      LOGGING.tcplog('test_ptf_any: PIPED ROW [' || l_row.sid || ']');
+    END LOOP;
+    RETURN;
+  END test_ptf_any;
+
+  FUNCTION test_ptf_hash (p_cursor  IN  t_parallel_test_ref_cursor)
+    RETURN t_parallel_test_tab PIPELINED
+    PARALLEL_ENABLE(PARTITION p_cursor BY HASH (country_code))
+  IS
+    l_row  t_parallel_test_row;
+  BEGIN
+    LOOP
+      FETCH p_cursor
+      INTO  l_row.id,
+            l_row.country_code,
+            l_row.description;
+      EXIT WHEN p_cursor%NOTFOUND;
+      
+      SELECT sid
+      INTO   l_row.sid
+      FROM   v$mystat
+      WHERE  rownum = 1;
+      
+      PIPE ROW (l_row);
+      LOGGING.tcplog('test_ptf_hash: PIPED ROW [' || l_row.sid || ']');
+    END LOOP;
+    RETURN;
+  END test_ptf_hash;
+
+  FUNCTION test_ptf_range (p_cursor  IN  t_parallel_test_ref_cursor)
+    RETURN t_parallel_test_tab PIPELINED
+    PARALLEL_ENABLE(PARTITION p_cursor BY RANGE (country_code))
+  IS
+    l_row  t_parallel_test_row;
+  BEGIN
+    LOOP
+      FETCH p_cursor
+      INTO  l_row.id,
+            l_row.country_code,
+            l_row.description;
+      EXIT WHEN p_cursor%NOTFOUND;
+      
+      SELECT sid
+      INTO   l_row.sid
+      FROM   v$mystat
+      WHERE  rownum = 1;
+      
+      PIPE ROW (l_row);
+      LOGGING.tcplog('test_ptf_range: PIPED ROW [' || l_row.sid || ']');
+    END LOOP;
+    RETURN;
+  END test_ptf_range;
+      
+END parallel_ptf_api;
+
+
+
+SELECT ACCOUNT, COUNT(*) FROM TABLE(TQ.QUERY_BATCHES2(CURSOR(
+  SELECT /*+ parallel(t1, 5) */ ROWIDTOCHAR(ROWID) XROWID, T.*  FROM TQSTUBS T ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID
+)))
+GROUP BY ACCOUNT
+ORDER BY ACCOUNT;
+
+
+SELECT ACCOUNT_ID, SID, COUNT(*) FROM TABLE(TQ.QUERY_BATCHES4(
+  CURSOR(
+      SELECT /*+ parallel(t1, 5) */ *  FROM TQSTUBS T 
+    )
+)) T2 GROUP BY ACCOUNT_ID, SID ORDER BY ACCOUNT_ID
+
+
+alter session set "_optimizer_ignore_hints" = false;
+
+
+SELECT ACCOUNT_ID, COUNT(*) TCOUNT, 
+  MIN(TQUEUE_ID) KEEP (DENSE_RANK FIRST ORDER BY TQUEUE_ID) FIRST_T,
+  MAX(TQUEUE_ID) KEEP (DENSE_RANK LAST ORDER BY TQUEUE_ID) LAST_T,
+  1,
+  CAST(COLLECT(ROWIDTOCHAR(ROWID)) AS XROWIDS) ROWIDS,
+  CAST(COLLECT(ROWIDTOCHAR(TQROWID)) AS XROWIDS) TQROWIDS
+FROM TQSTUBS
+GROUP BY ACCOUNT_ID
+ORDER BY ACCOUNT_ID, FIRST_T
+
+SELECT ACCOUNT_ID, COUNT(*) TCOUNT
+FROM TQSTUBS
+GROUP BY ACCOUNT_ID
+ORDER BY ACCOUNT_ID
+
+
+
+SELECT country_code, sid, count(*)
+FROM   TABLE(parallel_ptf_api.test_ptf_range(CURSOR(SELECT /*+ parallel(t1, 5) */ * FROM   parallel_test t1))) t2
+GROUP BY country_code,sid
+ORDER BY country_code,sid;
+
+
+
+
+
+SELECT ACCOUNT_ID, COUNT(*) TCOUNT, 
+  MIN(TQUEUE_ID) KEEP (DENSE_RANK FIRST ORDER BY TQUEUE_ID) FIRST_T,
+  MAX(TQUEUE_ID) KEEP (DENSE_RANK LAST ORDER BY TQUEUE_ID) LAST_T,
+  1,
+  CAST(COLLECT(XROWID) AS XROWIDS) ROWIDS,
+  CAST(COLLECT(TQROWID) AS XROWIDS) TQROWIDS
+FROM TABLE(TQ.QUERY_BATCHES4(
+  CURSOR(
+      SELECT /*+ parallel(t1, 5) */ ROWIDTOCHAR(ROWID) XROWID, T.*  FROM TQSTUBS T 
+    ), 8096
+))
+GROUP BY ACCOUNT_ID
+ORDER BY FIRST_T

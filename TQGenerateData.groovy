@@ -48,22 +48,30 @@ latch = new CountDownLatch(THREADS);
 allThreads = [];
 for(threads in 1..THREADS) {
     tx = Thread.startDaemon("TQDataLoader#${threads}", {
-        def tsql = Sql.newInstance(ds);
+        
+        def conn = null;
+        def ps = null;
         def me = Thread.currentThread().getName();
         println "Thread [$me] started";
-        try {            
+        try {           
+            conn = ds.getConnection();             
+            ps = conn.prepareCall("BEGIN TESTDATA.GENTRADES($BATCHSIZE); END;");
             for(x in 1..LOOPS) {
                 if(Thread.interrupted()) {
                     println "[$me] Interrupted. Exiting...";
                     return;
                 }
-                tsql.call("BEGIN TESTDATA.GENTRADES($BATCHSIZE); END;");
+                final long start = System.currentTimeMillis();
+                ps.execute();
+                final long elapsed = System.currentTimeMillis() - start;
                 long gtotal = totalTrades.addAndGet(BATCHSIZE);
-                println "[$me] Generated $BATCHSIZE. Rolling Total: $gtotal";
+                println "[$me] Generated $BATCHSIZE. Rolling Total: $gtotal, elapsed: $elapsed ms.";
             }
             println "[$me] Thread Completed";
          } finally {
             latch.countDown();
+            try { ps.close(); } catch (x) {}
+            try { conn.close(); } catch (x) {}
          }
     }); // end of Thread def
     allThreads.add(tx);
