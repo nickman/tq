@@ -196,6 +196,101 @@ create or replace PACKAGE BODY TQ as
         END;
   END GROUP_TQBATCHES;
   
+
+  -- *******************************************************
+  --    Groups an array of TQSTUBS_OBJ into an 
+  --    array of TQBATCHes.
+  -- *******************************************************
+  FUNCTION GROUP_TQBATCHES2(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE IS
+    batches TQBATCH_ARR;
+  BEGIN
+    SELECT VALUE(V) BULK COLLECT INTO batches FROM TABLE(QUERY_BATCHES2(CURSOR(
+      SELECT ROWIDTOCHAR(ROWID) XROWID, T.* 
+        FROM TQSTUBS T WHERE (threadMod = -1 OR MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod) ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID    
+    ), rowLimit))V;
+    FOR i in batches.FIRST..batches.LAST LOOP
+      PIPE ROW (batches(i));
+    END LOOP;
+    RETURN;
+    EXCEPTION
+      WHEN NO_DATA_NEEDED THEN 
+        Log('GROUP_TQBATCHES2: no_data_needed');
+        RETURN;
+      WHEN OTHERS THEN 
+        DECLARE
+          errm VARCHAR2(2000) := SQLERRM;
+          errc NUMBER := SQLCODE;
+        BEGIN
+          Log('GROUP_TQBATCHES2 ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
+          RAISE;
+        END;
+  END GROUP_TQBATCHES2;
+  
+  FUNCTION QUERY_BATCHES2(p IN TQSTUBS_REC_CUR, rowLimit IN PLS_INTEGER DEFAULT 1024) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID)) CLUSTER p BY (ACCOUNT_ID) IS
+    rec TQSTUBS_REC := NULL;
+    stub TQSTUBS_OBJ;
+    piped PLS_INTEGER := 1;
+    rows PLS_INTEGER := 0;      
+    currentBatch TQBATCH := null;
+  BEGIN
+    LOOP
+      FETCH p into rec;
+      EXIT WHEN p%NOTFOUND;
+      rows := rows +1;
+      EXIT WHEN(rows > rowLimit);
+      stub := NEW TQSTUBS_OBJ(rec.XROWID, ROWIDTOCHAR(rec.TQROWID),rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS);
+      IF(stub.SECURITY_TYPE = 'X') THEN
+        IF(currentBatch IS NOT NULL) THEN
+          PIPE ROW (currentBatch);
+          piped := piped +1;
+          Log('QUERY_BATCHES2 PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows);
+          currentBatch := NULL;
+        END IF;
+        PIPE ROW (NEW TQBATCH(stub, piped));
+        piped := piped + 1;
+        Log('QUERY_BATCHES2 PIPED:' || piped || ', size:1' || ',trows:' || rows);
+        CONTINUE;
+      END IF;
+      IF(currentBatch IS NULL) THEN
+        currentBatch := NEW TQBATCH(stub, piped);
+      ELSE
+        IF(currentBatch.ACCOUNT != stub.ACCOUNT_ID) THEN
+          PIPE ROW (currentBatch);
+          piped := piped +1;
+          Log('QUERY_BATCHES2 PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows); 
+          currentBatch := NEW TQBATCH(stub, piped);
+        ELSE 
+          currentBatch.ADDSTUB(stub);
+        END IF;
+      END IF;
+    END LOOP;
+    CLOSE p;
+    IF(currentBatch IS NOT NULL) THEN 
+      PIPE ROW(currentBatch);
+      piped := piped + 1;
+      Log('QUERY_BATCHES2 FINAL PIPE:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows); 
+      currentBatch := NULL;
+    END IF;    
+    RETURN;
+    EXCEPTION
+      WHEN NO_DATA_NEEDED THEN 
+        Log('QUERY_BATCHES2: no_data_needed');
+        IF(p%ISOPEN) THEN 
+          CLOSE p; 
+        END IF;
+        RETURN;
+      WHEN OTHERS THEN 
+        DECLARE
+          errm VARCHAR2(2000) := SQLERRM;
+          errc NUMBER := SQLCODE;
+        BEGIN
+          IF(p%ISOPEN) THEN 
+            CLOSE p; 
+          END IF;
+          Log('QUERY_BATCHES2 ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
+          RAISE;
+        END;    
+  END QUERY_BATCHES2;
   
   
   -- *******************************************************

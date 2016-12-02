@@ -7,7 +7,8 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 String DRIVER = "oracle.jdbc.OracleDriver";
-String URL = "jdbc:oracle:oci8:@";
+//String URL = "jdbc:oracle:oci8:@";
+String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
 String USER = "tqreactor";
 String PASS = "tq";
 
