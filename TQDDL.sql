@@ -44,15 +44,6 @@
 
    CREATE SEQUENCE  SEQ_READYBATCH_ID  MINVALUE 0 MAXVALUE 2147483647 INCREMENT BY 1 START WITH 1 CACHE 1000 ORDER  NOCYCLE ;
 
---------------------------------------------------------
---  DDL for Table REHANDLER
---------------------------------------------------------
-
-CREATE TABLE REHANDLERS (
-  ID INT PRIMARY KEY NOT NULL,
-  N CQ_NOTIFICATION$_DESCRIPTOR NOT NULL
-);
-
 
 
 --------------------------------------------------------
@@ -106,16 +97,6 @@ CREATE TABLE REHANDLERS (
   CREATE INDEX TQUEUE_XID_IDX ON TQUEUE (XID);
 
 
--------------------------------------------------------
---  DDL for EVENT table
---------------------------------------------------------
-
-  CREATE TABLE EVENT (
-    EVENT_ID NUMBER PRIMARY KEY NOT NULL,
-    ERRC NUMBER NOT NULL,
-    TS DATE NOT NULL, 
-    EVENT VARCHAR2(4000) NOT NULL
-  );
 
 -- =====================================================================================================================
 --   TQSTUBS
@@ -126,9 +107,9 @@ CREATE TABLE REHANDLERS (
 --  DDL for Table TQSTUBS
 --------------------------------------------------------
 
-  CREATE TABLE TQSTUBS  (
-    TQROWID          ROWID PRIMARY KEY NOT NULL, 
-    TQUEUE_ID        INT NOT NULL,
+  CREATE TABLE TQSTUBS  (    
+    TQROWID          VARCHAR2(18) NOT NULL, 
+    TQUEUE_ID        INT PRIMARY KEY NOT NULL,
     XID              RAW(8) NOT NULL,
     SECURITY_ID      INT NOT NULL, 
     SECURITY_TYPE    CHAR(1) NOT NULL, 
@@ -141,49 +122,12 @@ CREATE TABLE REHANDLERS (
 --  DDL for Index TQUEUESTUBS_PK
 --------------------------------------------------------
 
-  CREATE UNIQUE INDEX TQSTUBS_AK ON TQSTUBS (TQUEUE_ID);
   CREATE UNIQUE INDEX TQSTUBS_IND ON TQSTUBS (TQUEUE_ID, BATCH_ID);
 
---------------------------------------------------------
---  DDL for View TQUEUEV
---------------------------------------------------------
-
-CREATE OR REPLACE VIEW TQUEUEV AS SELECT ROWIDTOCHAR(ROWID) XROWID, TQUEUE_ID, XID, STATUS_CODE, 
-  SECURITY_DISPLAY_NAME, ACCOUNT_DISPLAY_NAME, 
-  SECURITY_ID, SECURITY_TYPE, 
-  ACCOUNT_ID, BATCH_ID,
-  CREATE_TS, UPDATE_TS, ERROR_MESSAGE FROM TQUEUE;
-
-
---------------------------------------------------------
---  DDL for Object Types
---------------------------------------------------------
 
 CREATE OR REPLACE TYPE INT_ARR FORCE AS TABLE OF INT;
 /
 
-
-  CREATE OR REPLACE TYPE TQTRADE FORCE AS OBJECT (
-  XROWID                    VARCHAR2(18),
-  TQUEUE_ID                 INT,
-  XID                       RAW(8),
-  STATUS_CODE               VARCHAR2(15),
-  SECURITY_DISPLAY_NAME     VARCHAR2(64),
-  ACCOUNT_DISPLAY_NAME      VARCHAR2(36),
-  SECURITY_ID               INT,
-  SECURITY_TYPE             CHAR(1),
-  ACCOUNT_ID                INT,
-  BATCH_ID                  INT,
-  CREATE_TS                 DATE,
-  UPDATE_TS                 DATE,
-  ERROR_MESSAGE             VARCHAR2(512)
-);
-/
-
-
-
-create or replace TYPE TQTRADE_ARR FORCE AS TABLE OF TQTRADE;
-/
 
 create or replace TYPE XROWIDS FORCE AS TABLE OF VARCHAR2(18);
 /
@@ -208,7 +152,9 @@ CREATE OR REPLACE TYPE TQSTUB FORCE AS OBJECT (
   SECURITY_TYPE             CHAR(1),            -- The type of the security
   ACCOUNT_ID                INT,                -- The ID of the account
   BATCH_ID                  INT,                -- The batch id assigned when a batch is locked 
-  BATCH_TS                  TIMESTAMP           -- The timestamp when the batch id was assigned
+  BATCH_TS                  TIMESTAMP,          -- The timestamp when the batch id was assigned
+  SID                       NUMBER              -- The SID of the selecting session so we can verify parallel
+
 );
 /
 
