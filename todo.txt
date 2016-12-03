@@ -1,0 +1,12 @@
+TODO (TQ)
+==========
+Add SID to types
+Looping Query:  loops, sleep time
+Use Dynamic SQL for Queries so parallel hints are configurable
+Profiling
+Clean DDL
+
+Java Side
+=========
+Identify and handle package discarded state exception (retry)
+

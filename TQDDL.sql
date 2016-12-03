@@ -139,7 +139,7 @@ create or replace TYPE VARCHAR2_ARR FORCE IS TABLE OF VARCHAR2(200);
 /
 
 --------------------------------------------------------
---  TQSTUB type
+--  TQSTUBS type
 --------------------------------------------------------
 
 
