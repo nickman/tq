@@ -31,7 +31,7 @@ create or replace PACKAGE BODY TESTDATA AS
         errm VARCHAR2(2000) := SQLERRM;
         errc NUMBER := SQLCODE;
       BEGIN
-        LOGEVENT( errm || ' : Failed RANDOMSEC. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+        LOGGING.TCPLOG( errm || ' : Failed RANDOMSEC. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', errc:' || errc);
         raise;
       END;
   END RANDOMSEC;
@@ -60,7 +60,7 @@ create or replace PACKAGE BODY TESTDATA AS
         errc NUMBER := SQLCODE;
 
       BEGIN
-        LOGEVENT( errm || ' : Failed RANDOMACCT. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+        LOGGING.TCPLOG( errm || ' : Failed RANDOMACCT. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', errc:' || errc);
         raise;
       END;
   END RANDOMACCT;
@@ -80,7 +80,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
         errc NUMBER := SQLCODE;
 
       BEGIN
-        LOGEVENT( errm || ' : Failed RANDOMSECTYPE. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
+        LOGGING.TCPLOG( errm || ' : Failed RANDOMSECTYPE. sz:' || sz || ', rand:' || rand || ' : ' || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ',errc:' || errc);
         raise;
       END;
   END RANDOMSECTYPE;
@@ -188,7 +188,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       FOR R IN (SELECT * FROM TABLE(PIPEACCTCACHE)) LOOP
         d := R.ACCOUNT_DISPLAY_NAME;
       END LOOP;
-      LOGEVENT('INITIALIZED ACCT CACHE: ' || accountCache.COUNT || ' ACCOUNTS');
+      LOGGING.TCPLOG('INITIALIZED ACCT CACHE: ' || accountCache.COUNT || ' ACCOUNTS');
       -- populate security cache
       idx := 1;
       FOR R IN (SELECT SECURITY_DISPLAY_NAME, SECURITY_TYPE, SECURITY_ID FROM SECURITY) LOOP
@@ -202,7 +202,7 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       FOR R IN (SELECT * FROM TABLE(PIPESECCACHE)) LOOP
         d := R.SECURITY_DISPLAY_NAME;
       END LOOP;
-      LOGEVENT('INITIALIZED SECURITY CACHE: ' || securityCache.COUNT || ' SECURITIES');
+      LOGGING.TCPLOG('INITIALIZED SECURITY CACHE: ' || securityCache.COUNT || ' SECURITIES');
     END LOADCACHES;
 
   -- *******************************************************

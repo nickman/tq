@@ -98,6 +98,7 @@
 
 
 
+
 -- =====================================================================================================================
 --   TQSTUBS
 -- =====================================================================================================================
@@ -139,85 +140,162 @@ create or replace TYPE VARCHAR2_ARR FORCE IS TABLE OF VARCHAR2(200);
 /
 
 --------------------------------------------------------
---  TQSTUBS type
+--  TQUEUE_OBJ type
 --------------------------------------------------------
 
-
-CREATE OR REPLACE TYPE TQSTUB FORCE AS OBJECT (
-  XROWID                    VARCHAR2(18),       -- The TQSTUBS ROWID
-  TQROWID                   VARCHAR2(18),       -- The TQUEUE ROWID
-  TQUEUE_ID                 INT,                -- The TQUEUE PK
-  XID                       RAW(8),             -- The XID of the transaction that INSERTed/UPDATEd TQUEUE
-  SECURITY_ID               INT,                -- The ID of the security
-  SECURITY_TYPE             CHAR(1),            -- The type of the security
-  ACCOUNT_ID                INT,                -- The ID of the account
-  BATCH_ID                  INT,                -- The batch id assigned when a batch is locked 
-  BATCH_TS                  TIMESTAMP,          -- The timestamp when the batch id was assigned
-  SID                       NUMBER              -- The SID of the selecting session so we can verify parallel
-
+CREATE OR REPLACE TYPE TQUEUE_OBJ FORCE AS OBJECT (
+  XROWID VARCHAR2(18),
+  TQUEUE_ID NUMBER(22),
+  XID RAW(8),
+  STATUS_CODE VARCHAR2(15),
+  SECURITY_DISPLAY_NAME VARCHAR2(64),
+  ACCOUNT_DISPLAY_NAME VARCHAR2(36),
+  SECURITY_ID NUMBER(22),
+  SECURITY_TYPE CHAR(1),
+  ACCOUNT_ID NUMBER(22),
+  BATCH_ID NUMBER(22),
+  CREATE_TS DATE,
+  UPDATE_TS DATE,
+  ERROR_MESSAGE VARCHAR2(512),
+MEMBER FUNCTION TOV RETURN VARCHAR2
 );
 /
+CREATE OR REPLACE TYPE BODY TQUEUE_OBJ AS
+MEMBER FUNCTION TOV RETURN VARCHAR2 AS
+BEGIN
+RETURN SELF.XROWID || ',' || SELF.TQUEUE_ID || ',' || SELF.XID || ',' || SELF.STATUS_CODE || ',' || SELF.SECURITY_DISPLAY_NAME || ',' || SELF.ACCOUNT_DISPLAY_NAME || ',' || SELF.SECURITY_ID || ',' || SELF.SECURITY_TYPE || ',' || SELF.ACCOUNT_ID || ',' || SELF.BATCH_ID || ',' || SELF.CREATE_TS || ',' || SELF.UPDATE_TS || ',' || SELF.ERROR_MESSAGE;
+END TOV;
+END;
+/
 
-
-
-CREATE OR REPLACE TYPE TQSTUB_ARR FORCE AS TABLE OF TQSTUB;
+CREATE OR REPLACE TYPE TQUEUE_OBJ_ARR FORCE AS TABLE OF TQUEUE_OBJ;
 /
 
 
+--------------------------------------------------------
+--  TQSTUBS_OBJ type
+--------------------------------------------------------
+
+CREATE OR REPLACE TYPE TQSTUBS_OBJ FORCE AS OBJECT (
+  XROWID VARCHAR2(18),
+  TQROWID VARCHAR2(18),
+  TQUEUE_ID NUMBER(22),
+  XID RAW(8),
+  SECURITY_ID NUMBER(22),
+  SECURITY_TYPE CHAR(1),
+  ACCOUNT_ID NUMBER(22),
+  BATCH_ID NUMBER(22),
+  BATCH_TS TIMESTAMP(6),
+MEMBER FUNCTION TOV RETURN VARCHAR2
+);
+/
+CREATE OR REPLACE TYPE BODY TQSTUBS_OBJ AS
+MEMBER FUNCTION TOV RETURN VARCHAR2 AS
+BEGIN
+RETURN SELF.XROWID || ',' || SELF.TQROWID || ',' || SELF.TQUEUE_ID || ',' || SELF.XID || ',' || SELF.SECURITY_ID || ',' || SELF.SECURITY_TYPE || ',' || SELF.ACCOUNT_ID || ',' || SELF.BATCH_ID || ',' || SELF.BATCH_TS;
+END TOV;
+END;
+/
+CREATE OR REPLACE TYPE TQSTUBS_OBJ_ARR FORCE AS TABLE OF TQSTUBS_OBJ;
+/
 
 --------------------------------------------------------
 --  DDL for Type TQBATCH
 --------------------------------------------------------
 
-  CREATE OR REPLACE TYPE TQBATCH FORCE AS OBJECT (
-  ACCOUNT           INT,
+create or replace TYPE TQBATCH FORCE AS OBJECT (
+  ACCOUNT_ID        INT,
   TCOUNT            INT,
   FIRST_T           INT,
   LAST_T            INT,
   BATCH_ID          INT,
   ROWIDS            XROWIDS,
-  STUBS             TQSTUB_ARR,
-  MAP MEMBER FUNCTION F RETURN NUMBER
+  TQROWIDS          XROWIDS,
+  STUBS             TQSTUBS_OBJ_ARR,
+  SID               NUMBER,
+  MAP MEMBER FUNCTION F RETURN NUMBER,
+  MEMBER PROCEDURE ADDSTUB(stub TQSTUBS_OBJ),
+  MEMBER FUNCTION TOV RETURN VARCHAR2,
+  CONSTRUCTOR FUNCTION TQBATCH(stub TQSTUBS_OBJ, batchId PLS_INTEGER) RETURN SELF AS RESULT
 );
 /
-CREATE OR REPLACE TYPE BODY TQBATCH AS
+create or replace TYPE BODY TQBATCH AS
 
   MAP MEMBER FUNCTION F RETURN NUMBER AS
   BEGIN    
     RETURN SELF.FIRST_T;
   END F;
+  
+  MEMBER PROCEDURE ADDSTUB(stub TQSTUBS_OBJ) AS
+  BEGIN
+    IF(ACCOUNT_ID != stub.ACCOUNT_ID) THEN
+      RAISE_APPLICATION_ERROR(-1, 'INVALID ACCOUNT FOR THIS BATCH: (' || stub.ACCOUNT_ID || ') BATCH IS FOR [' || SELF.ACCOUNT_ID || ']');
+    END IF;
+    TCOUNT := TCOUNT + 1;
+    LAST_T := stub.TQUEUE_ID;    
+    ROWIDS.extend(); ROWIDS(TCOUNT) := stub.XROWID;
+    TQROWIDS.extend(); TQROWIDS(TCOUNT) := stub.TQROWID;
+    STUBS.extend(); STUBS(TCOUNT) := stub;    
+  END ADDSTUB;
+  
+  CONSTRUCTOR FUNCTION TQBATCH(stub TQSTUBS_OBJ, batchId PLS_INTEGER)
+    RETURN SELF AS RESULT AS
+  BEGIN    
+    ACCOUNT_ID := stub.ACCOUNT_ID;
+    TCOUNT := 1;
+    FIRST_T := stub.TQUEUE_ID;
+    LAST_T := stub.TQUEUE_ID;
+    BATCH_ID := batchId;
+    ROWIDS := NEW XROWIDS(stub.XROWID);
+    TQROWIDS := NEW XROWIDS(stub.TQROWID);
+    STUBS := NEW TQSTUBS_OBJ_ARR(stub);  
+    SID := stub.SID;
+    RETURN;
+  END;
+  
+  MEMBER FUNCTION TOV RETURN VARCHAR2 IS
+  BEGIN
+    IF(TCOUNT=1) THEN
+      RETURN 'TQBATCH [sid:' || SID || ',acc:' || ACCOUNT_ID || ',batchid:' || BATCH_ID || ',trade:' || FIRST_T || ',stype:' || STUBS(1).SECURITY_TYPE || ']';
+    ELSE 
+      RETURN 'TQBATCH [sid:' || SID || ',acc:' || ACCOUNT_ID || ',batchid:' || BATCH_ID || ',trades:' || TCOUNT || ',trades:' || FIRST_T || '-' || LAST_T || ']';
+    END IF;
+  END TOV;
+
+END;
+/
+
+create or replace TYPE TQBATCH_ARR AS TABLE OF TQBATCH;
+/
+
+create or replace TYPE BATCH_SPEC AS OBJECT  (
+  THREAD_MOD INT, 
+  ROW_LIMIT INT,
+  THREAD_COUNT INT,
+  BUCKET_SIZE INT,
+  CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999) RETURN SELF AS RESULT
+
+);
+/
+CREATE OR REPLACE
+TYPE BODY BATCH_SPEC AS
+
+  CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999) RETURN SELF AS RESULT AS
+  BEGIN
+    SELF.THREAD_MOD := THREAD_MOD;
+    SELF.ROW_LIMIT := ROW_LIMIT;
+    SELF.THREAD_COUNT := THREAD_COUNT;
+    SELF.BUCKET_SIZE := BUCKET_SIZE;
+    RETURN;
+  END BATCH_SPEC;
 
 END;
 /
 
 
-create table TQBATCHES OF TQBATCH
-  NESTED TABLE ROWIDS STORE AS ROWIDS_NESTED_TAB
-  NESTED TABLE STUBS STORE AS STUBS_NESTED_TAB;
-
-
-
 --------------------------------------------------------
---  DDL for View TQUEUEO
+--  Data types
 --------------------------------------------------------
-
-  CREATE OR REPLACE VIEW TQUEUEO OF TQTRADE
-  WITH OBJECT IDENTIFIER (TQUEUE_ID) AS 
-  SELECT ROWIDTOCHAR(ROWID) XROWID, TQUEUE_ID, XID, STATUS_CODE, 
-  SECURITY_DISPLAY_NAME, ACCOUNT_DISPLAY_NAME, 
-  SECURITY_ID, SECURITY_TYPE, 
-  ACCOUNT_ID, BATCH_ID,
-  CREATE_TS, UPDATE_TS, ERROR_MESSAGE FROM TQUEUE;
-
-
-
-
-
-
-
-create or replace TYPE TQBATCH_ARR FORCE AS TABLE OF TQBATCH;
-/  
-
 
 
 CREATE OR REPLACE TYPE SEC_DECODE IS OBJECT (
@@ -231,7 +309,7 @@ create or replace TYPE SEC_DECODE_ARR IS  TABLE OF SEC_DECODE;
 /
 
 create or replace TYPE ACCT_DECODE IS OBJECT (
-    ACCOUNT_DISPLAY_NAME   	VARCHAR2(64),
+    ACCOUNT_DISPLAY_NAME    VARCHAR2(64),
     ACCOUNT_ID             NUMBER
 );
 /
@@ -239,158 +317,21 @@ create or replace TYPE ACCT_DECODE IS OBJECT (
 create or replace TYPE ACCT_DECODE_ARR IS  TABLE OF ACCT_DECODE;
 /
 
+--------------------------------------------------------
+--  TQ package
+--------------------------------------------------------
+
 
 --------------------------------------------------------
---  DDL for View TQSTUBOV
+--  TQUEUE trigger
 --------------------------------------------------------
 
-  CREATE OR REPLACE VIEW TQSTUBOV OF TQSTUB
-  WITH OBJECT IDENTIFIER (TQROWID) AS SELECT
-  ROWIDTOCHAR(ROWID) XROWID, 
-  ROWIDTOCHAR(TQROWID) TQROWID, 
-  TQUEUE_ID, 
-  XID, 
-  SECURITY_ID, 
-  SECURITY_TYPE, 
-  ACCOUNT_ID,
-  BATCH_ID,
-  BATCH_TS
-  FROM TQSTUBS;
-
-
-  -- *******************************************************
-  --    TCP Logger
-  -- *******************************************************
-
-  create or replace procedure tlogevent 
-(
-  message in varchar2 default 'NOOP' 
-) as 
-  c  utl_tcp.connection;  -- TCP/IP connection to the Web server
-  ret_val pls_integer; 
-begin  
-    c := utl_tcp.open_connection(remote_host => '127.0.0.1',remote_port =>  1234,  charset     => 'US7ASCII');  -- open connection
-    ret_val := utl_tcp.write_line(c, message);   
-    utl_tcp.close_connection(c);
-  EXCEPTION WHEN OTHERS THEN
-        BEGIN
-            utl_tcp.close_connection(c);
-        END;
-  null;
-end tlogevent;
-
-  -- *******************************************************
-  --    Autonomous TX Logger
-  -- *******************************************************
-
-
-  CREATE OR REPLACE PROCEDURE LOGEVENT(msg VARCHAR2, errcode NUMBER default 0) IS
-    PRAGMA AUTONOMOUS_TRANSACTION;
+  create or replace TRIGGER STUB_REPLICATION_TRG
+  AFTER INSERT ON TQUEUE 
+  REFERENCING OLD AS OLD NEW AS NEW 
+  FOR EACH ROW 
   BEGIN
-    --INSERT INTO EVENT(EVENT_ID, ERRC, TS, EVENT) VALUES (SEQ_EVENT_ID.NEXTVAL, ABS(errcode), SYSDATE, msg);
-    --COMMIT;
-    NULL;
-  END LOGEVENT;
-  /
-
-
-
---------------------------------------------------------
---  CQN Package
---------------------------------------------------------
-@CQN.pls
-/
-@CQNBody.pls
-/
-
---------------------------------------------------------
---  TQV Package
---------------------------------------------------------
-@TQV.pls
-/
-@TQVBody.pls
-/
-
---------------------------------------------------------
---  TESTDATA Package
---------------------------------------------------------
-@TESTDATA.pls
-/
-@TESTDATABody.pls
-/
-
---------------------------------------------------------
---  TQBATCHOV Object view of TQBATCHes
---------------------------------------------------------
-
-CREATE OR REPLACE FORCE VIEW TQBATCHOV OF TQBATCH
-WITH OBJECT IDENTIFIER (BATCH_ID) AS 
-SELECT * FROM TABLE(TQV.GETBATCHES);
+    TQ.TRIGGER_STUB(:NEW.ROWID, :NEW.TQUEUE_ID, :NEW.STATUS_CODE, :NEW.SECURITY_DISPLAY_NAME, :NEW.ACCOUNT_DISPLAY_NAME, :NEW.BATCH_ID);
+  END;
   
-
-
---------------------------------------------------------
---  TQUEUE Insert Callback Handler
---------------------------------------------------------
-
-create or replace PROCEDURE TQUEUE_INSERT_CALLBACK (
-  ntfnds IN OUT CQ_NOTIFICATION$_DESCRIPTOR   ) IS
-  PRAGMA AUTONOMOUS_TRANSACTION;
-  TARGET_CHANGED EXCEPTION;
-  PRAGMA EXCEPTION_INIT(TARGET_CHANGED, -6508 );
-  events NUMBER := 0;
-BEGIN
-/*
-  IF (ntfnds.event_type != DBMS_CQ_NOTIFICATION.EVENT_QUERYCHANGE) THEN
-    RETURN;
-  END IF;
-*/
-  events := TQV.HANDLE_CHANGE(ntfnds);
-  DBMS_ALERT.SIGNAL ('TQSTUB.ALERT.EVENT', TO_CHAR(events));
-  COMMIT;
-    /*  THIS error happens sometimes:  "CALLBACK ERROR: [ORA-06508: PL/SQL: could not find program unit being called] - ORA-06512: at "TQREACTOR.TQUEUE_INSERT_CALLBACK", line 10 */
-    EXCEPTION
-    WHEN TARGET_CHANGED THEN
-      BEGIN
-        EXECUTE IMMEDIATE 'BEGIN TQV.HANDLE_CHANGE(:1); WHEN OTHERS THEN DECLARE errm VARCHAR2(2000) := SQLERRM;errc NUMBER := SQLCODE; BEGIN LOGEVENT(''CALLBACK ERROR: ['' || errm || ''] - '' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc); END;' USING ntfnds;
-      END;
-    WHEN OTHERS THEN
-      DECLARE
-        errm VARCHAR2(2000) := SQLERRM;
-        errc NUMBER := SQLCODE;
-      BEGIN
-        LOGEVENT('CALLBACK ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE(), errc);
-        COMMIT;
-      END;
-
-END;
-/
-
-DECLARE
-  reginfo  CQ_NOTIFICATION$_REG_INFO;
-  v_cursor SYS_REFCURSOR;
-  regid    NUMBER;
-BEGIN
-  reginfo := cq_notification$_reg_info (
-    'TQUEUE_INSERT_CALLBACK',                 -- The callback handler
-    DBMS_CQ_NOTIFICATION.QOS_QUERY +          -- Specifies Query Change, Reliable and with ROWIDs
-      DBMS_CQ_NOTIFICATION.QOS_RELIABLE + 
-      DBMS_CQ_NOTIFICATION.QOS_ROWIDS,
-    0,                                        -- No timeout 
-    DBMS_CQ_NOTIFICATION.INSERTOP,            -- Specifies INSERT Ops  (DBMS_CQ_NOTIFICATION.ALL_OPERATIONS)
-    0                                         -- Ignored for query result change notification 
-  );
-
-  regid := DBMS_CQ_NOTIFICATION.new_reg_start(reginfo);
-
-  OPEN v_cursor FOR
-    SELECT DBMS_CQ_NOTIFICATION.CQ_NOTIFICATION_QUERYID, ROWID FROM TQUEUE
-    WHERE STATUS_CODE IN ('PENDING', 'ENRICH', 'RETRY');
-  CLOSE v_cursor;
-  DBMS_CQ_NOTIFICATION.REG_END;
-  --DBMS_CQ_NOTIFICATION.SET_ROWID_THRESHOLD('TQUEUE', 100);
-END;
-/
-
-
 
