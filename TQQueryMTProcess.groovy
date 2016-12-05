@@ -9,7 +9,8 @@ import java.util.concurrent.atomic.*;
 String DRIVER = "oracle.jdbc.OracleDriver";
 //String URL = "jdbc:oracle:oci8:@";
 //String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
-String URL = "jdbc:oracle:thin:@//192.168.1.35:1521/ORCL";
+//String URL = "jdbc:oracle:thin:@//192.168.1.35:1521/ORCL";
+String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
 String USER = "tqreactor";
 String PASS = "tq";
 
@@ -23,7 +24,7 @@ ds.setPassword(PASS);
 
 
 final int THREADS = 4;
-final int ROW_LIMIT = 8096;
+final int ROW_LIMIT = 1024;
 final int FETCH_SIZE = 100;
 
 final Connection[] connections = new Connection[THREADS];

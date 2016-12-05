@@ -46,6 +46,32 @@
 
 
 
+  create or replace TYPE BATCH_SPEC AS OBJECT  (
+    THREAD_MOD INT,         -- The thread mod for this request 
+    ROW_LIMIT INT,          -- The maximum number of rows to process per call
+    THREAD_COUNT INT,       -- The total number of threads polling
+    BUCKET_SIZE INT,        -- The ORA_HASH seed
+    WAIT_LOOPS  INT,        -- The number of times to loop waiting on rows to show up
+    WAIT_SLEEP  NUMBER,     -- The number of seconds to wait after each loop (fractional 100ths of seconds allowed)
+    CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999, WAIT_LOOPS IN INT DEFAULT 2, WAIT_SLEEP IN NUMBER DEFAULT 1) RETURN SELF AS RESULT
+  );
+  /
+  create or replace TYPE BODY BATCH_SPEC AS
+  CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999, WAIT_LOOPS IN INT DEFAULT 2, WAIT_SLEEP IN NUMBER DEFAULT 1) RETURN SELF AS RESULT AS
+  BEGIN
+    SELF.THREAD_MOD := THREAD_MOD;
+    SELF.ROW_LIMIT := ROW_LIMIT;
+    SELF.THREAD_COUNT := THREAD_COUNT;
+    SELF.BUCKET_SIZE := BUCKET_SIZE;
+    SELF.WAIT_LOOPS := WAIT_LOOPS;
+    SELF.WAIT_SLEEP := WAIT_SLEEP;
+    RETURN;
+  END BATCH_SPEC;
+
+END;
+/
+
+
 --------------------------------------------------------
 --  DDL for Table ACCOUNT
 --------------------------------------------------------
@@ -186,13 +212,14 @@ CREATE OR REPLACE TYPE TQSTUBS_OBJ FORCE AS OBJECT (
   ACCOUNT_ID NUMBER(22),
   BATCH_ID NUMBER(22),
   BATCH_TS TIMESTAMP(6),
+  SID NUMBER,
 MEMBER FUNCTION TOV RETURN VARCHAR2
 );
 /
 CREATE OR REPLACE TYPE BODY TQSTUBS_OBJ AS
 MEMBER FUNCTION TOV RETURN VARCHAR2 AS
 BEGIN
-RETURN SELF.XROWID || ',' || SELF.TQROWID || ',' || SELF.TQUEUE_ID || ',' || SELF.XID || ',' || SELF.SECURITY_ID || ',' || SELF.SECURITY_TYPE || ',' || SELF.ACCOUNT_ID || ',' || SELF.BATCH_ID || ',' || SELF.BATCH_TS;
+RETURN '[sid:' || SELF.SID || ', xrowid:' || SELF.XROWID || ', tqrowid:' || SELF.TQROWID || ', tqid:' || SELF.TQUEUE_ID || ', xid:' || SELF.XID || ', sec:' || SELF.SECURITY_ID || ', sectype:' || SELF.SECURITY_TYPE || ', acc:' || SELF.ACCOUNT_ID || ', batch:' || SELF.BATCH_ID || ', bachts' || SELF.BATCH_TS;
 END TOV;
 END;
 /

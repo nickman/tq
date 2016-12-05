@@ -9,7 +9,8 @@ import java.util.concurrent.atomic.*;
 String DRIVER = "oracle.jdbc.OracleDriver";
 //String URL = "jdbc:oracle:oci8:@";
 //String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
-String URL = "jdbc:oracle:thin:@//192.168.1.35:1521/ORCL";
+//String URL = "jdbc:oracle:thin:@//192.168.1.35:1521/ORCL";
+String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
 String USER = "tqreactor";
 String PASS = "tq";
 
@@ -19,9 +20,9 @@ ds.setURL(URL);
 ds.setUser(USER);
 ds.setPassword(PASS);
 
-THREADS = 4;
+THREADS = 2;
 BATCHSIZE = 100;
-LOOPS = 2000;
+LOOPS = 5000;
 
 
 sql = Sql.newInstance(ds);
@@ -55,8 +56,10 @@ for(threads in 1..THREADS) {
         def me = Thread.currentThread().getName();
         println "Thread [$me] started";
         try {           
-            conn = ds.getConnection();             
-            ps = conn.prepareCall("BEGIN TESTDATA.GENTRADES($BATCHSIZE); END;");
+            conn = ds.getConnection();    
+            conn.setAutoCommit(false);         
+            ps = conn.prepareCall("BEGIN TESTDATA.GENTRADES(?); END;");
+            ps.setInt(1, BATCHSIZE);
             for(x in 1..LOOPS) {
                 if(Thread.interrupted()) {
                     println "[$me] Interrupted. Exiting...";
@@ -64,6 +67,7 @@ for(threads in 1..THREADS) {
                 }
                 final long start = System.currentTimeMillis();
                 ps.execute();
+                conn.commit();
                 final long elapsed = System.currentTimeMillis() - start;
                 long gtotal = totalTrades.addAndGet(BATCHSIZE);
                 println "[$me] Generated $BATCHSIZE. Rolling Total: $gtotal, elapsed: $elapsed ms.";
