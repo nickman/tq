@@ -7,10 +7,10 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 String DRIVER = "oracle.jdbc.OracleDriver";
-//String URL = "jdbc:oracle:oci8:@";
+String URL = "jdbc:oracle:oci8:@";
 //String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
 //String URL = "jdbc:oracle:thin:@//192.168.1.35:1521/ORCL";
-String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
+//String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
 String USER = "tqreactor";
 String PASS = "tq";
 
@@ -20,7 +20,7 @@ ds.setURL(URL);
 ds.setUser(USER);
 ds.setPassword(PASS);
 
-THREADS = 2;
+THREADS = 8;
 BATCHSIZE = 100;
 LOOPS = 5000;
 
@@ -45,6 +45,7 @@ if(ACCTSIZE<1) {
     println "Accounts Already Loaded";
 }    
 
+final long rootStartTime = System.currentTimeMillis()/1000L;
 totalTrades = new AtomicLong();
 latch = new CountDownLatch(THREADS);
 allThreads = [];
@@ -70,7 +71,9 @@ for(threads in 1..THREADS) {
                 conn.commit();
                 final long elapsed = System.currentTimeMillis() - start;
                 long gtotal = totalTrades.addAndGet(BATCHSIZE);
-                println "[$me] Generated $BATCHSIZE. Rolling Total: $gtotal, elapsed: $elapsed ms.";
+        final long elapsedSecs = (System.currentTimeMillis()/1000L)-rootStartTime;
+        final long avgPer = gtotal / elapsedSecs;
+                println "[$me] Generated $BATCHSIZE. Rolling Total: $gtotal, elapsed: $elapsed ms.  rate: $avgPer trades/sec";
             }
             println "[$me] Thread Completed";
          } finally {

@@ -25,8 +25,15 @@ ds.setPassword(PASS);
 final int THREADS = 4;
 final int ROW_LIMIT = 1024;
 final int FETCH_SIZE = 1;
+final int CPU_MULTI = 2;
 
 final Connection[] connections = new Connection[THREADS];
+addShutdownHook {
+	connections.each() {
+		if(it!=null) try { it.close(); } catch (x) {}
+	}
+	println "All Connections Closed In Shutdown Hook";		
+}
 
 try {
 	for(i in 0..THREADS-1) {    	
@@ -53,10 +60,13 @@ for(q in 0..1000) {
 	       def msg = null;
 	       int rowCount = 0;
 	       try {
-	       		ps = connections[i].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(?, ?, ?)) T ORDER BY T.FIRST_T");
+	       		//ps = connections[i].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(?, ?, ?)) T ORDER BY T.FIRST_T");
+	       		ps = connections[i].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(TQ.MAKE_SPEC(?, ?, ?, ?))) T ORDER BY T.FIRST_T"); // 1, 1024, 16
+	       		
 	       		ps.setInt(1, x);
 	       		ps.setInt(2, ROW_LIMIT);
 	       		ps.setInt(3, THREADS);
+	       		ps.setInt(4, CPU_MULTI);
 		       	final long start = System.currentTimeMillis();
 	       		rset = ps.executeQuery();
 	       		rset.setFetchSize(100);

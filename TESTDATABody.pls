@@ -123,22 +123,8 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
       SELECT VALUE(T) BULK COLLECT INTO securities FROM TABLE(RANDOMSECS(noOfTrades)) T;
         
       FORALL i in 1..noOfTrades
-        INSERT INTO TQUEUE
+        INSERT /*+ APPEND */ INTO TQUEUE
           VALUES(SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID(), 'PENDING',  securities(i).SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, batchId, SYSDATE, NULL, NULL);
-
---    FOR i in 1..tradeCount LOOP
---      IF done = tradeCount THEN EXIT; END IF;
---      account := RANDOMACCT;
---      noOfTrades := ABS(MOD(SYS.DBMS_RANDOM.RANDOM, 10));
---      IF noOfTrades = 0 THEN noOfTrades := 1; END IF;
---      FOR x in 1..noOfTrades LOOP
---        security := RANDOMSEC;
---        INSERT INTO TQUEUE
---          VALUES(SEQ_TQUEUE_ID.NEXTVAL, tq.CURRENTXID(), 'PENDING',  security.SECURITY_DISPLAY_NAME, account.ACCOUNT_DISPLAY_NAME, NULL, NULL, NULL, NULL, SYSDATE, NULL, NULL);
---        done := done + 1;
---        IF done = tradeCount THEN EXIT; END IF;
---      END LOOP;
---    END LOOP;
     COMMIT;
   END GENTRADES;
 --
@@ -160,8 +146,9 @@ FUNCTION RANDOMSECTYPE RETURN CHAR IS
   -- *******************************************************
   PROCEDURE GENSECS(secCount IN NUMBER DEFAULT 10000) IS
   BEGIN
+    
     FOR i in 1..secCount LOOP
-      INSERT INTO SECURITY VALUES(SEQ_SECURITY_ID.NEXTVAL, SYS_GUID(), RANDOMSECTYPE);
+      INSERT /*+ APPEND */ INTO SECURITY VALUES(SEQ_SECURITY_ID.NEXTVAL, SYS_GUID(), RANDOMSECTYPE);      
     END LOOP;
     COMMIT;
   END GENSECS;

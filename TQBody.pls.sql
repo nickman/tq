@@ -1,9 +1,23 @@
 create or replace PACKAGE BODY TQ as
-  
   -- Enablement flag for tcp logging
   TCPLOG_ENABLED BOOLEAN := TRUE;
   -- The current session's SID
   SID NUMBER;
+  -- The number of cpus available to Oracle
+  CPUS CONSTANT PLS_INTEGER := CPUCOUNT();
+  
+  -- ==================================================================================
+  --  Determines the number of CPUs available to Oracle
+  -- ==================================================================================
+  FUNCTION CPUCOUNT RETURN PLS_INTEGER DETERMINISTIC IS
+    cpus PLS_INTEGER;
+  BEGIN
+    SELECT VALUE into CPUS FROM V$OSSTAT WHERE STAT_NAME = 'NUM_CPUS';
+    RETURN cpus;
+  END CPUCOUNT;
+
+
+
 
   PROCEDURE log(message IN VARCHAR2) IS
   BEGIN
@@ -53,28 +67,6 @@ create or replace PACKAGE BODY TQ as
   BEGIN
       LOOP
       FETCH p INTO rec;
---        rec.XROWID,
---        rec.TQROWID,
---        rec.TQUEUE_ID,
---        rec.XID,
---        rec.SECURITY_ID,
---        rec.SECURITY_TYPE,
---        rec.ACCOUNT_ID,
---        rec.BATCH_ID,
---        rec.BATCH_TS;
---        rec.SID;
-        
---    XROWID VARCHAR2(18),
---    TQROWID VARCHAR2(18),
---    TQUEUE_ID TQSTUBS.TQUEUE_ID%TYPE,
---    XID TQSTUBS.XID%TYPE,
---    SECURITY_ID TQSTUBS.SECURITY_ID%TYPE,
---    SECURITY_TYPE TQSTUBS.SECURITY_TYPE%TYPE,
---    ACCOUNT_ID TQSTUBS.ACCOUNT_ID%TYPE,
---    BATCH_ID TQSTUBS.BATCH_ID%TYPE,
---    BATCH_TS TQSTUBS.BATCH_TS%TYPE,
---    SID NUMBER
-        
         PIPE ROW(TQSTUBS_OBJ(rec.XROWID,rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS, rec.SID));
       END LOOP;
       RETURN;
@@ -141,371 +133,54 @@ create or replace PACKAGE BODY TQ as
   END TRIGGER_STUB;
   
 
+  
   -- *******************************************************
-  --    Groups an array of TQSTUBS_OBJ into an 
-  --    array of TQBATCHes.
-  -- *******************************************************
-  FUNCTION GROUP_TQBATCHES(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE IS
-    tqb TQBATCH := NULL;
-    stub TQSTUBS_OBJ;
-    piped PLS_INTEGER := 1;
-    rows PLS_INTEGER := 0;
---    CURSOR getBatches IS SELECT VALUE(T) FROM TABLE(QUERY_BATCHES(threadMod, rowLimit, threadCount, bucketSize)) T;
-    CURSOR getBatches IS 
-      SELECT /*+ parallel(T, 8) */ TQSTUBS_OBJ(ROWIDTOCHAR(ROWID), ROWIDTOCHAR(TQROWID),TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,BATCH_TS, SID)
-        FROM TQSTUBS T WHERE (threadMod = -1 OR MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod) ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID;
-  BEGIN
-    Log('GROUP_TQBATCHES START, THREAD:' || threadMod);
-    OPEN getBatches;
-    Log('GROUP_TQBATCHES: Cursor Opened');
-    LOOP
-      EXIT WHEN rows >= rowLimit;
-      FETCH getBatches INTO stub;
-      EXIT WHEN getBatches%NOTFOUND;
-      rows := rows + 1;
-      --IF(stub.SECURITY_TYPE = 'X' OR stub.SECURITY_TYPE = 'Y' OR stub.SECURITY_TYPE = 'Z') THEN
-      IF(stub.SECURITY_TYPE = 'X') THEN
-        IF(tqb IS NOT NULL) THEN
-          PIPE ROW (tqb);
-          piped := piped + 1;
-          Log('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows);        
-          tqb := NULL;
-        END IF;
-        PIPE ROW (NEW TQBATCH(stub, piped));
-        piped := piped + 1;
-        Log('GROUP_TQBATCHES PIPED:' || piped || ', size:1' || ',trows:' || rows);        
-        CONTINUE;
-      END IF;
-      IF(tqb IS NULL) THEN
-        tqb := NEW TQBATCH(stub, piped);
-      ELSE 
-        IF(tqb.ACCOUNT_ID != stub.ACCOUNT_ID) THEN
-          PIPE ROW(tqb);
-          piped := piped + 1;
-          Log('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows); 
-          tqb := NEW TQBATCH(stub, piped);
-        ELSE           
-          tqb.ADDSTUB(stub);
-        END IF;
-      END IF;
-    END LOOP;
-    Log('GROUP_TQBATCHES: END LOOP');
-    IF(tqb IS NOT NULL) THEN 
-      PIPE ROW(tqb);
-      piped := piped + 1;
-      Log('GROUP_TQBATCHES PIPED:' || piped || ', size:' || tqb.TCOUNT || ',trows:' || rows); 
-      tqb := NULL;
-    END IF;
-    CLOSE getBatches;
-    Log('GROUP_TQBATCHES: CURSOR CLOSED');
-    RETURN;
-    EXCEPTION
-      WHEN NO_DATA_NEEDED THEN 
-        Log('GROUP_TQBATCHES START: no_data_needed');
-        IF(getBatches%ISOPEN) THEN 
-          CLOSE getBatches; 
-          Log('GROUP_TQBATCHES: CURSOR CLOSED');
-        END IF;
-        --RAISE;    
-        RETURN;
-      WHEN OTHERS THEN 
-        DECLARE
-          errm VARCHAR2(2000) := SQLERRM;
-          errc NUMBER := SQLCODE;
-        BEGIN
-          IF(getBatches%ISOPEN) THEN 
-            CLOSE getBatches; 
-            Log('GROUP_TQBATCHES: CURSOR CLOSED');
-          END IF;
-          Log('GROUP_TQBATCHES ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
-          RAISE;
-        END;
-  END GROUP_TQBATCHES;
-  
-
-  -- *******************************************************
-  --    Groups an array of TQSTUBS_OBJ into an 
-  --    array of TQBATCHes.
-  -- *******************************************************
-  FUNCTION GROUP_TQBATCHES2(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE IS
-    batches TQBATCH_ARR;    
-    batch TQBATCH;
-    CURSOR p IS SELECT VALUE(V) FROM TABLE(TQ.QUERY_BATCHES2(CURSOR(
-      SELECT /*+ parallel(t1, 5) */ ROWIDTOCHAR(ROWID) XROWID, T.* 
-        FROM TQSTUBS T WHERE (threadMod = -1 OR MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod) ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID    
-      ), rowLimit)) V;
-      
-      
-
-      
-
-  BEGIN
---    SELECT VALUE(V) BULK COLLECT INTO batches FROM TABLE(QUERY_BATCHES2(CURSOR(
---      SELECT ROWIDTOCHAR(ROWID) XROWID, T.* 
---        FROM TQSTUBS T WHERE (threadMod = -1 OR MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod) ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID    
---    ), rowLimit))V;
---    FOR i in batches.FIRST..batches.LAST LOOP
---      PIPE ROW (batches(i));
---    END LOOP;
-    OPEN p;
-    LOOP
-      EXIT WHEN p%NOTFOUND;
-      FETCH p INTO batch;
-      PIPE ROW(batch);
-    END LOOP;
-    CLOSE P;
-    RETURN;
-    EXCEPTION
-      WHEN NO_DATA_NEEDED THEN 
-        Log('GROUP_TQBATCHES2: no_data_needed');
-        RETURN;
-      WHEN OTHERS THEN 
-        DECLARE
-          errm VARCHAR2(2000) := SQLERRM;
-          errc NUMBER := SQLCODE;
-        BEGIN
-          Log('GROUP_TQBATCHES2 ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
-          RAISE;
-        END;
-  END GROUP_TQBATCHES2;
-  
-  FUNCTION QUERY_BATCHES2(p IN TQSTUBS_REC_CUR, rowLimit IN PLS_INTEGER DEFAULT 1024) RETURN TQBATCH_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID)) IS
-    rec TQSTUBS_REC := NULL;
-    stub TQSTUBS_OBJ;
-    piped PLS_INTEGER := 1;
-    rows PLS_INTEGER := 0;      
-    currentBatch TQBATCH := null;
-  BEGIN
-    LOOP
-     FETCH p INTO rec;
---        rec.XROWID,
---        rec.TQROWID,
---        rec.TQUEUE_ID,
---        rec.XID,
---        rec.SECURITY_ID,
---        rec.SECURITY_TYPE,
---        rec.ACCOUNT_ID,
---        rec.BATCH_ID,
---        rec.BATCH_TS;
-    EXIT WHEN p%NOTFOUND;
-      rows := rows +1;
-      EXIT WHEN(rows > rowLimit);
-      stub := NEW TQSTUBS_OBJ(rec.XROWID, rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS, SID);
-      IF(stub.SECURITY_TYPE = 'X') THEN
-        IF(currentBatch IS NOT NULL) THEN
-          PIPE ROW (currentBatch);
-          piped := piped +1;
-          Log('QUERY_BATCHES2: Acct:' || currentBatch.ACCOUNT_ID ||  ',PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows); 
-          currentBatch := NULL;
-        END IF;
-        PIPE ROW (NEW TQBATCH(stub, piped));
-        piped := piped + 1;
-        Log('QUERY_BATCHES2: Acct:' || stub.ACCOUNT_ID ||  ', PIPED:' || piped || ', size:1' || ',trows:' || rows);
-        CONTINUE;
-      END IF;
-      IF(currentBatch IS NULL) THEN
-        currentBatch := NEW TQBATCH(stub, piped);
-      ELSE
-        IF(currentBatch.ACCOUNT_ID != stub.ACCOUNT_ID) THEN
-          PIPE ROW (currentBatch);
-          piped := piped +1;
-          Log('QUERY_BATCHES2: Acct:' || currentBatch.ACCOUNT_ID ||  ',PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows); 
-          currentBatch := NEW TQBATCH(stub, piped);
-        ELSE 
-          currentBatch.ADDSTUB(stub);
-        END IF;
-      END IF;
-    END LOOP;
-    CLOSE p;
-    IF(currentBatch IS NOT NULL) THEN 
-      PIPE ROW(currentBatch);
-      piped := piped + 1;
-      Log('QUERY_BATCHES2 FINAL: Acct:' || currentBatch.ACCOUNT_ID ||  ',PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows); 
-      currentBatch := NULL;
-    END IF;    
-    RETURN;
-    EXCEPTION
-      WHEN NO_DATA_NEEDED THEN 
-        Log('QUERY_BATCHES2: no_data_needed');
-        IF(p%ISOPEN) THEN 
-          CLOSE p; 
-        END IF;
-        RETURN;
-      WHEN OTHERS THEN 
-        DECLARE
-          errm VARCHAR2(2000) := SQLERRM;
-          errc NUMBER := SQLCODE;
-        BEGIN
-          IF(p%ISOPEN) THEN 
-            CLOSE p; 
-          END IF;
-          Log('QUERY_BATCHES2 ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
-          RAISE;
-        END;    
-  END QUERY_BATCHES2;
-  
-  FUNCTION NEWBATCH(stub IN TQSTUBS_OBJ, piped IN PLS_INTEGER) RETURN TQBATCH_REC IS
-    b TQBATCH_REC;
-  BEGIN
-    b.ACCOUNT := stub.ACCOUNT_ID;
-    b.TCOUNT := 1;
-    b.FIRST_T := stub.TQUEUE_ID;
-    b.LAST_T := stub.TQUEUE_ID;
-    b.BATCH_ID := piped;
-    b.ROWIDS := NEW XROWIDS(stub.XROWID);
-    b.TQROWIDS := new XROWIDS(stub.TQROWID);
-    b.STUBS := NEW TQSTUBS_OBJ_ARR(stub);
-    return b;
-  END NEWBATCH;
-  
-  PROCEDURE UPDATEBATCH(b IN OUT NOCOPY TQBATCH_REC, stub IN TQSTUBS_OBJ) IS
-  BEGIN
-    b.LAST_T := stub.TQUEUE_ID;
-    b.ROWIDS.extend();
-    b.TQROWIDS.extend();
-    b.STUBS.extend();
-    b.TCOUNT := b.TCOUNT + 1;
-    b.ROWIDS(b.TCOUNT) := stub.XROWID;
-    b.TQROWIDS(b.TCOUNT) := stub.TQROWID;
-    b.STUBS(b.TCOUNT) := stub;
-  END UPDATEBATCH;
-  
-  
-  FUNCTION QUERY_BATCHES3(p IN TQSTUBS_REC_CUR, rowLimit IN PLS_INTEGER DEFAULT 1024) RETURN TQBATCH_REC_ARR PIPELINED PARALLEL_ENABLE ( PARTITION p BY RANGE(ACCOUNT_ID)) IS
-    rec TQSTUBS_REC := NULL;
-    stub TQSTUBS_OBJ;
-    piped PLS_INTEGER := 1;
-    rows PLS_INTEGER := 0;      
-    currentBatch TQBATCH_REC := null;
-  BEGIN
-    LOOP
-     FETCH p INTO rec;
---        rec.XROWID,
---        rec.TQROWID,
---        rec.TQUEUE_ID,
---        rec.XID,
---        rec.SECURITY_ID,
---        rec.SECURITY_TYPE,
---        rec.ACCOUNT_ID,
---        rec.BATCH_ID,
---        rec.BATCH_TS;
-    EXIT WHEN p%NOTFOUND;
-      rows := rows +1;
-      EXIT WHEN(rows > rowLimit);
-      stub := NEW TQSTUBS_OBJ(rec.XROWID, rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS, rec.SID);
-      IF(stub.SECURITY_TYPE = 'X') THEN
-        IF(currentBatch.ACCOUNT IS NOT NULL) THEN
-          PIPE ROW (currentBatch);
-          piped := piped +1;
-          Log('QUERY_BATCHES3 [' || SID || ': Acct:' || currentBatch.ACCOUNT ||  ',PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows); 
-          currentBatch.ACCOUNT := NULL;
-        END IF;
-        PIPE ROW (NEWBATCH(stub, piped));
-        piped := piped + 1;
-        Log('QUERY_BATCHES3 [' || SID || ': Acct:' || stub.ACCOUNT_ID ||  ', PIPED:' || piped || ', size:1' || ',trows:' || rows);
-        CONTINUE;
-      END IF;
-      IF(currentBatch.ACCOUNT IS NULL) THEN
-        currentBatch := NEWBATCH(stub, piped);
-      ELSE
-        IF(currentBatch.ACCOUNT != stub.ACCOUNT_ID) THEN
-          PIPE ROW (currentBatch);
-          piped := piped +1;
-          Log('QUERY_BATCHES3 [' || SID || ': Acct:' || currentBatch.ACCOUNT ||  ',PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows); 
-          currentBatch := NEWBATCH(stub, piped);
-        ELSE 
-          UPDATEBATCH(currentBatch, stub);
-        END IF;
-      END IF;
-    END LOOP;
-    CLOSE p;
-    IF(currentBatch.ACCOUNT IS NOT NULL) THEN
-      PIPE ROW(currentBatch);
-      piped := piped + 1;
-      Log('QUERY_BATCHES3 FINAL [' || SID || ': Acct:' || currentBatch.ACCOUNT ||  ',PIPED:' || piped || ', size:' || currentBatch.TCOUNT || ',trows:' || rows);       
-    END IF;    
-    RETURN;
-    EXCEPTION
-      WHEN NO_DATA_NEEDED THEN 
-        Log('QUERY_BATCHES3 [' || SID || ': no_data_needed');        
-        RETURN;
-      WHEN OTHERS THEN 
-        DECLARE
-          errm VARCHAR2(2000) := SQLERRM;
-          errc NUMBER := SQLCODE;
-        BEGIN
-          Log('QUERY_BATCHES3 ERROR: [' || errm || '] - ' ||   DBMS_UTILITY.FORMAT_ERROR_BACKTRACE() || ', ERRCODE:' || errc);
-          RAISE;
-        END;    
-  END QUERY_BATCHES3;
-  
-  
-  FUNCTION QUERY_BATCHES4(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_REC_ARR PIPELINED PARALLEL_ENABLE (PARTITION p BY HASH(ACCOUNT_ID)) IS
-    rec TQSTUBS_REC;
-  BEGIN
-    LOOP
-      FETCH p INTO rec;
---        rec.XROWID,
---        rec.TQROWID,
---        rec.TQUEUE_ID,
---        rec.XID,
---        rec.SECURITY_ID,
---        rec.SECURITY_TYPE,
---        rec.ACCOUNT_ID,
---        rec.BATCH_ID,
---        rec.BATCH_TS;
-      EXIT WHEN p%NOTFOUND;  
-      PIPE ROW (rec);
-      --LOGGING.tcplog('QUERY_BATCHES4: PIPED ROW');
-      
-    END LOOP;
-    RETURN;  
-  END QUERY_BATCHES4;
-  
-  
-  FUNCTION QUERY_SPEC(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999) RETURN BATCH_SPEC IS
-    qspec BATCH_SPEC := NEW BATCH_SPEC(threadMod, rowLimit, threadCount, bucketSize);
+  --    Creates a new Query Spec
+  -- *******************************************************  
+  FUNCTION MAKE_SPEC(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, cpuMulti INT DEFAULT 1, waitLoops IN INT DEFAULT 2, waitSleep IN NUMBER DEFAULT 1, bucketSize IN PLS_INTEGER DEFAULT 999999) RETURN BATCH_SPEC IS
+   --THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, CPU_MULTI INT DEFAULT 1, WAIT_LOOPS IN INT DEFAULT 2, WAIT_SLEEP IN NUMBER DEFAULT 1, BUCKET_SIZE INT DEFAULT 999999
+    qspec BATCH_SPEC := NEW BATCH_SPEC(thread_mod => threadMod, row_limit => rowLimit, thread_count => threadCount,  cpu_multi => cpuMulti, wait_loops => waitLoops, wait_sleep => waitSleep, bucket_size => bucketSize);
   BEGIN
     RETURN qspec;
   END;
   
-  FUNCTION GROUP_BATCH_STUBS(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999) RETURN TQBATCH_ARR PIPELINED IS
-    qspec BATCH_SPEC := NEW BATCH_SPEC(threadMod, rowLimit, threadCount, bucketSize);    
-    CURSOR p is SELECT TQSTUBS_OBJ(
-      T.XROWID,
-      T.TQROWID,
-      T.TQUEUE_ID,
-      T.XID,
-      T.SECURITY_ID,
-      T.SECURITY_TYPE,
-      T.ACCOUNT_ID,
-      T.BATCH_ID,
-      T.BATCH_TS,
-      T.SID
-    ) FROM TABLE(FIND_BATCH_STUBS(CURSOR(
-      --SELECT /*+ parallel(V, 8) */ ROWIDTOCHAR(ROWID), V.*, TQ.MYSID() FROM TQSTUBS V WHERE MOD(ORA_HASH(ACCOUNT_ID, 999999),16) = 9 ORDER BY TQUEUE_ID;
-      SELECT /*+ parallel(V, 8) */ ROWIDTOCHAR(ROWID), V.*, MYSID() FROM TQSTUBS V WHERE (threadMod = -1 OR MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod) ORDER BY TQUEUE_ID
-      --SELECT /*+ parallel(V, 8) */ ROWIDTOCHAR(ROWID), V.*, MYSID() FROM TQSTUBS V WHERE XHASH(ACCOUNT_ID) = threadMod ORDER BY TQUEUE_ID
-    ))) T ORDER BY T.TQUEUE_ID;
+
+
+  -- *******************************************************
+  --    Groups an array of TQSTUBS_OBJ into an 
+  --    array of TQBATCHes.
+  -- *******************************************************
+  FUNCTION GROUP_BATCH_STUBS(spec IN BATCH_SPEC DEFAULT DEFAULT_SPEC) RETURN TQBATCH_ARR PIPELINED IS
+--    CURSOR p is SELECT TQSTUBS_OBJ(T.XROWID, T.TQROWID, T.TQUEUE_ID, T.XID, T.SECURITY_ID, T.SECURITY_TYPE, T.ACCOUNT_ID, T.BATCH_ID, T.BATCH_TS, T.SID) FROM TABLE(FIND_BATCH_STUBS(CURSOR(      
+--      SELECT /*+ parallel(V, 8) */ ROWIDTOCHAR(ROWID), V.*, MYSID() FROM TQSTUBS V WHERE (spec.THREAD_MOD = -1 OR MOD(ORA_HASH(ACCOUNT_ID, spec.BUCKET_SIZE),spec.THREAD_COUNT) = spec.THREAD_MOD) ORDER BY TQUEUE_ID      
+--    ))) T ORDER BY T.TQUEUE_ID;
+    TYPE StubCur IS REF CURSOR;
+    p StubCur;
     rows PLS_INTEGER := 0;
     stub TQSTUBS_OBJ;
     tqOrderedStubs TQSTUBS_OBJ_ARR := NEW TQSTUBS_OBJ_ARR();
     accountOrderedStubs TQSTUBS_OBJ_ARR;
     batch TQBATCH := NULL;
     batchId PLS_INTEGER := 1;
+    stubsSql VARCHAR2(1000) := 'SELECT TQSTUBS_OBJ(T.XROWID, T.TQROWID, T.TQUEUE_ID, T.XID, T.SECURITY_ID, T.SECURITY_TYPE, T.ACCOUNT_ID, T.BATCH_ID, T.BATCH_TS, T.SID) FROM TABLE(TQ.FIND_BATCH_STUBS(CURSOR(' ||
+      'SELECT /*+ parallel(V, ' || (CPUS * spec.CPU_MULTI) || ') */ ROWIDTOCHAR(ROWID), V.*, TQ.MYSID() FROM TQSTUBS V WHERE (:a = -1 OR MOD(ORA_HASH(ACCOUNT_ID, :b), :c) = :a) ' ||
+      '))) T ORDER BY T.TQUEUE_ID';
+    
     
   BEGIN
-    OPEN p;
+    LOGGING.tcpLog('STUB SQL:' || stubsSql);
+    OPEN p FOR stubsSql USING spec.THREAD_MOD, spec.BUCKET_SIZE, spec.THREAD_COUNT, spec.THREAD_MOD;
+
     --FETCH p BULK COLLECT INTO tqOrderedStubs LIMIT rowLimit;
     LOOP
-      EXIT WHEN p%NOTFOUND OR rows = rowLimit;
+      EXIT WHEN p%NOTFOUND OR rows = spec.ROW_LIMIT;
       rows := rows +1;
       tqOrderedStubs.extend();
       FETCH p INTO tqOrderedStubs(rows);
       --Logging.tcplog('TQ ACCT: ' || tqOrderedStubs(rows).ACCOUNT_ID || ', TQ:' || tqOrderedStubs(rows).TQUEUE_ID);
     END LOOP;
-    SELECT VALUE(X) BULK COLLECT INTO accountOrderedStubs FROM TABLE(tqOrderedStubs) X ORDER BY ACCOUNT_ID, TQUEUE_ID;
     CLOSE p;    
+    SELECT VALUE(X) BULK COLLECT INTO accountOrderedStubs FROM TABLE(tqOrderedStubs) X ORDER BY ACCOUNT_ID, TQUEUE_ID;    
     FOR i IN accountOrderedStubs.FIRST..accountOrderedStubs.LAST LOOP
       --Logging.tcplog('ORDERED ACCT: ' || accountOrderedStubs(i).ACCOUNT_ID || ', TQ:' || accountOrderedStubs(i).TQUEUE_ID);
       IF(accountOrderedStubs(i).SECURITY_TYPE = 'X') THEN
@@ -536,9 +211,9 @@ create or replace PACKAGE BODY TQ as
       WHEN NO_DATA_NEEDED THEN 
         log('GROUP_BATCH_STUBS: NO_DATA_NEEDED');        
         NULL;
-      WHEN OTHERS THEN 
-        -- TODO: log error
-        RAISE;                    
+--      WHEN OTHERS THEN 
+--        -- TODO: log error
+--        RAISE;                    
   END GROUP_BATCH_STUBS;
   
   FUNCTION FIND_BATCH_STUBS(p IN TQSTUBS_REC_CUR) RETURN TQSTUBS_REC_ARR PIPELINED CLUSTER p BY (ACCOUNT_ID) PARALLEL_ENABLE (PARTITION p BY HASH(ACCOUNT_ID)) IS
@@ -825,7 +500,7 @@ create or replace PACKAGE BODY TQ as
 -- Updates rows in TQUEUE from the passed TQUEUE_OBJs and deletes the stubs
 --=============================================================================================================  
   PROCEDURE COMPLETE_BATCH(trades IN TQUEUE_OBJ_ARR, xrowids IN XROWIDS) IS
-    drows INT;
+    drows INT := 0;
     now TIMESTAMP := SYSTIMESTAMP;
   BEGIN    
     FORALL i IN trades.FIRST..trades.LAST
@@ -896,4 +571,3 @@ create or replace PACKAGE BODY TQ as
   BEGIN
     SELECT SYS_CONTEXT('USERENV', 'SID') INTO sid FROM DUAL;
 end tq;
-/

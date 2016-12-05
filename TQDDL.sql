@@ -46,29 +46,30 @@
 
 
 
-  create or replace TYPE BATCH_SPEC AS OBJECT  (
+create or replace TYPE BATCH_SPEC AS OBJECT  (
     THREAD_MOD INT,         -- The thread mod for this request 
     ROW_LIMIT INT,          -- The maximum number of rows to process per call
     THREAD_COUNT INT,       -- The total number of threads polling
     BUCKET_SIZE INT,        -- The ORA_HASH seed
     WAIT_LOOPS  INT,        -- The number of times to loop waiting on rows to show up
-    WAIT_SLEEP  NUMBER,     -- The number of seconds to wait after each loop (fractional 100ths of seconds allowed)
-    CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999, WAIT_LOOPS IN INT DEFAULT 2, WAIT_SLEEP IN NUMBER DEFAULT 1) RETURN SELF AS RESULT
+    WAIT_SLEEP  NUMBER,     -- The number of seconds to wait after each loop (fractional 100ths of seconds allowed),
+    CPU_MULTI INT,          -- A multiplier on the number of cpus to determine the parallelism of the driving query. 
+    CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, CPU_MULTI INT DEFAULT 1, WAIT_LOOPS IN INT DEFAULT 2, WAIT_SLEEP IN NUMBER DEFAULT 1, BUCKET_SIZE INT DEFAULT 999999) RETURN SELF AS RESULT
   );
-  /
-  create or replace TYPE BODY BATCH_SPEC AS
-  CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999, WAIT_LOOPS IN INT DEFAULT 2, WAIT_SLEEP IN NUMBER DEFAULT 1) RETURN SELF AS RESULT AS
+    /
+create or replace TYPE BODY BATCH_SPEC AS
+  CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, CPU_MULTI INT DEFAULT 1, WAIT_LOOPS IN INT DEFAULT 2, WAIT_SLEEP IN NUMBER DEFAULT 1, BUCKET_SIZE INT DEFAULT 999999) RETURN SELF AS RESULT IS
   BEGIN
     SELF.THREAD_MOD := THREAD_MOD;
     SELF.ROW_LIMIT := ROW_LIMIT;
     SELF.THREAD_COUNT := THREAD_COUNT;
+    SELF.CPU_MULTI := CPU_MULTI;
     SELF.BUCKET_SIZE := BUCKET_SIZE;
     SELF.WAIT_LOOPS := WAIT_LOOPS;
     SELF.WAIT_SLEEP := WAIT_SLEEP;
     RETURN;
   END BATCH_SPEC;
-
-END;
+END;  
 /
 
 
@@ -283,9 +284,9 @@ create or replace TYPE BODY TQBATCH AS
   MEMBER FUNCTION TOV RETURN VARCHAR2 IS
   BEGIN
     IF(TCOUNT=1) THEN
-      RETURN 'TQBATCH [sid:' || SID || ',acc:' || ACCOUNT_ID || ',batchid:' || BATCH_ID || ',trade:' || FIRST_T || ',stype:' || STUBS(1).SECURITY_TYPE || ']';
+      RETURN 'TQBATCH [sid:' || SID || ',acc:' || ACCOUNT_ID || ',batchid:' || BATCH_ID || ',tqid:' || FIRST_T || ',stype:' || STUBS(1).SECURITY_TYPE || ']';
     ELSE 
-      RETURN 'TQBATCH [sid:' || SID || ',acc:' || ACCOUNT_ID || ',batchid:' || BATCH_ID || ',trades:' || TCOUNT || ',trades:' || FIRST_T || '-' || LAST_T || ']';
+      RETURN 'TQBATCH [sid:' || SID || ',acc:' || ACCOUNT_ID || ',batchid:' || BATCH_ID || ',tcount:' || TCOUNT || ',tqids:' || FIRST_T || '-' || LAST_T || ']';
     END IF;
   END TOV;
 
@@ -295,29 +296,6 @@ END;
 create or replace TYPE TQBATCH_ARR AS TABLE OF TQBATCH;
 /
 
-create or replace TYPE BATCH_SPEC AS OBJECT  (
-  THREAD_MOD INT, 
-  ROW_LIMIT INT,
-  THREAD_COUNT INT,
-  BUCKET_SIZE INT,
-  CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999) RETURN SELF AS RESULT
-
-);
-/
-CREATE OR REPLACE
-TYPE BODY BATCH_SPEC AS
-
-  CONSTRUCTOR FUNCTION BATCH_SPEC(THREAD_MOD INT DEFAULT -1, ROW_LIMIT INT DEFAULT 1024, THREAD_COUNT INT DEFAULT 12, BUCKET_SIZE INT DEFAULT 999999) RETURN SELF AS RESULT AS
-  BEGIN
-    SELF.THREAD_MOD := THREAD_MOD;
-    SELF.ROW_LIMIT := ROW_LIMIT;
-    SELF.THREAD_COUNT := THREAD_COUNT;
-    SELF.BUCKET_SIZE := BUCKET_SIZE;
-    RETURN;
-  END BATCH_SPEC;
-
-END;
-/
 
 
 --------------------------------------------------------
@@ -343,6 +321,17 @@ create or replace TYPE ACCT_DECODE IS OBJECT (
 
 create or replace TYPE ACCT_DECODE_ARR IS  TABLE OF ACCT_DECODE;
 /
+
+create view RC as 
+select 'ACCOUNTS' as "TABLE", count(*) as "ROWS" from account
+UNION ALL
+select 'SECURITIES' as "TABLE", count(*) as "ROWS" from security
+UNION ALL
+select 'TRADES' as "TABLE", count(*) as "ROWS" from tqueue
+UNION ALL
+select 'STUBS' as "TABLE", count(*) as "ROWS" from tqstubs;
+
+
 
 --------------------------------------------------------
 --  TQ package
