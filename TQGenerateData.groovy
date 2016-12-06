@@ -7,10 +7,10 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 String DRIVER = "oracle.jdbc.OracleDriver";
-String URL = "jdbc:oracle:oci8:@";
+// String URL = "jdbc:oracle:oci8:@";
 //String URL = "jdbc:oracle:thin:@//localhost:1521/XE";
 //String URL = "jdbc:oracle:thin:@//192.168.1.35:1521/ORCL";
-//String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
+String URL = "jdbc:oracle:thin:@//localhost:1521/ORCL";
 String USER = "tqreactor";
 String PASS = "tq";
 

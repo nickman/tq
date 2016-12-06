@@ -20,7 +20,13 @@ ds.setURL(URL);
 ds.setUser(USER);
 ds.setPassword(PASS);
 
+println "OracleConnection.END_TO_END_STATE_INDEX_MAX: ${OracleConnection.END_TO_END_STATE_INDEX_MAX}";
+println "OracleConnection.END_TO_END_ACTION_INDEX: ${OracleConnection.END_TO_END_ACTION_INDEX}";
+println "OracleConnection.END_TO_END_MODULE_INDEX: ${OracleConnection.END_TO_END_MODULE_INDEX}";
+println "OracleConnection.END_TO_END_CLIENTID_INDEX: ${OracleConnection.END_TO_END_CLIENTID_INDEX}";
 
+
+//  FIXME:  Statistics data is not available because statistics aggregation is not enabled for the selected action
 
 final int THREADS = 4;
 final int ROW_LIMIT = 1024;
@@ -38,6 +44,21 @@ addShutdownHook {
 try {
 	for(i in 0..THREADS-1) {    	
 		connections[i] = ds.getConnection();
+		def Properties clientInfo = new Properties();		
+		// clientInfo.setProperty(OracleConnection.OCSID_ACTION_KEY, "BatchReader");
+  // 		clientInfo.setProperty(OracleConnection.OCSID_MODULE_KEY, "TQProcessor");
+  // 		clientInfo.setProperty(OracleConnection.OCSID_CLIENTID_KEY,"Thread#${i+1}");	
+		// clientInfo.setProperty("OCSID.ACTION", "BatchReader");
+  // 		clientInfo.setProperty("OSCID.MODULE", "TQProcessor");
+  // 		clientInfo.setProperty("OSCID.CLIENTID","Thread#${i+1}");	
+		//String[] e2e = new String[OracleConnection.END_TO_END_STATE_INDEX_MAX];
+		String[] e2e = [
+			"BatchReader",
+			"Thread#${i+1}",
+			null,
+			"TQProcessor"
+		] as String[];
+  		connections[i].setEndToEndMetrics(e2e, (short) 0);
 		println "Acquired Connection #${i+1}";
 	}
 	println "All Connections Acquired";
@@ -61,7 +82,7 @@ for(q in 0..1000) {
 	       int rowCount = 0;
 	       try {
 	       		//ps = connections[i].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(?, ?, ?)) T ORDER BY T.FIRST_T");
-	       		ps = connections[i].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(TQ.MAKE_SPEC(?, ?, ?, ?))) T ORDER BY T.FIRST_T"); // 1, 1024, 16
+	       		ps = connections[x].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(TQ.MAKE_SPEC(?, ?, ?, ?))) T ORDER BY T.FIRST_T"); // 1, 1024, 16
 	       		
 	       		ps.setInt(1, x);
 	       		ps.setInt(2, ROW_LIMIT);
@@ -80,7 +101,8 @@ for(q in 0..1000) {
 					msg = "NO ROWS";
 				}
 		       	final long elapsed = System.currentTimeMillis() - start;
-		       	println "MOD: $x, BATCH: $msg,  rows: $rowCount  elapsed: $elapsed ms.";
+		       	final String[] e2eMetrics = connections[x].getEndToEndMetrics();		       	
+		       	println "MOD: $x, BATCH: $msg,  rows: $rowCount  elapsed: $elapsed ms.\n\tE2E: ${e2eMetrics}";
 		   } finally {
 		   		try { rset.close(); } catch (ex) {}
 		   		try { ps.close(); } catch (ex) {}
