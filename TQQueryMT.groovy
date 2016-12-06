@@ -59,6 +59,11 @@ try {
 			"TQProcessor"
 		] as String[];
   		connections[i].setEndToEndMetrics(e2e, (short) 0);
+
+		//clientInfo.setProperty("OCSID.ACTION", "BatchReader");
+  		//clientInfo.setProperty("OCSID.MODULE", "TQProcessor");
+  		clientInfo.setProperty("OCSID.CLIENTID","Thread#${i+1}");	
+  		connections[i].setClientInfo(clientInfo);
 		println "Acquired Connection #${i+1}";
 	}
 	println "All Connections Acquired";
@@ -101,7 +106,8 @@ for(q in 0..1000) {
 					msg = "NO ROWS";
 				}
 		       	final long elapsed = System.currentTimeMillis() - start;
-		       	final String[] e2eMetrics = connections[x].getEndToEndMetrics();		       	
+		       	//final String[] e2eMetrics = connections[x].getEndToEndMetrics();		       	
+		       	final Properties e2eMetrics = connections[x].getClientInfo();
 		       	println "MOD: $x, BATCH: $msg,  rows: $rowCount  elapsed: $elapsed ms.\n\tE2E: ${e2eMetrics}";
 		   } finally {
 		   		try { rset.close(); } catch (ex) {}

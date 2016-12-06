@@ -649,3 +649,59 @@ select * from tqstubs
                 AND BATCH_ID < 1 OR BATCH_ID IS NULL
                 AND BATCH_TS IS NULL
                 ORDER BY TQUEUE_ID, ACCOUNT_ID
+
+
+==========================================================================
+
+BEGIN
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'TQSTUBS', estimate_percent => 100);
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'TQUEUE', estimate_percent => 100);
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'ACCOUNT', estimate_percent => 100);
+    DBMS_STATS.GATHER_TABLE_STATS (ownname => 'TQREACTOR', tabname => 'SECURITY', estimate_percent => 100);
+END;
+
+
+select * from rc;
+
+DECLARE
+  q VARCHAR2(2000);
+BEGIN
+  DBMS_APPLICATION_INFO.SET_MODULE(module_name => 'TQProcessor', action_name => 'NextBatch');
+  DBMS_SESSION.SESSION_TRACE_ENABLE(waits => true, binds => true, plan_stat => 'ALL_EXECUTIONS'); 
+  SELECT VALUE(T).TOV() INTO q  FROM TABLE(TQ.GROUP_BATCH_STUBS(TQ.MAKE_SPEC(1, 1, 128))) T ORDER BY T.FIRST_T;
+  DBMS_OUTPUT.PUT_LINE(q);
+  DBMS_APPLICATION_INFO.SET_MODULE(module_name => null, action_name => null);
+  DBMS_SESSION.SESSION_TRACE_DISABLE();
+END;
+
+                   
+select tracefile from v$process where addr=(
+  select paddr from v$session where sid = TQ.MYSID()
+)
+
+
+MODS !!!
+
+final int MOD = 35;
+final int TCOUNT = 16;
+
+mod = {v, x ->
+    return v%x;
+}
+
+
+
+for(t in 0..TCOUNT-1) {
+    b = new StringBuilder("THREAD: $t\n\t");
+    for(i in 0..MOD-1) {
+        xmod = mod(i,TCOUNT);
+        if(xmod==t) {
+            b.append(i).append(",");
+        }
+    }
+    b.deleteCharAt(b.length()-1);
+    println b.toString();
+}
+
+
+

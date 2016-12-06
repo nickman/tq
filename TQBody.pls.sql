@@ -1,6 +1,6 @@
 create or replace PACKAGE BODY TQ as
   -- Enablement flag for tcp logging
-  TCPLOG_ENABLED BOOLEAN := TRUE;
+  TCPLOG_ENABLED BOOLEAN := FALSE;
   -- The current session's SID
   SID NUMBER;
   -- The number of cpus available to Oracle
@@ -34,7 +34,7 @@ create or replace PACKAGE BODY TQ as
       TCPLOG_ENABLED := TRUE;
     END IF;
   END SET_TCPLOG_ENABLED;
-  
+   
   FUNCTION IS_TCPLOG_ENABLED RETURN PLS_INTEGER IS
   BEGIN
     IF(TCPLOG_ENABLED) THEN RETURN 1;
@@ -137,8 +137,8 @@ create or replace PACKAGE BODY TQ as
   -- *******************************************************
   --    Creates a new Query Spec
   -- *******************************************************  
-  FUNCTION MAKE_SPEC(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 2147483647, threadCount IN PLS_INTEGER DEFAULT 8, cpuMulti INT DEFAULT 1, waitLoops IN INT DEFAULT 2, waitSleep IN NUMBER DEFAULT 1) RETURN BATCH_SPEC IS
-    qspec BATCH_SPEC := NEW BATCH_SPEC(thread_mod => threadMod, row_limit => rowLimit, thread_count => threadCount,  cpu_multi => cpuMulti, wait_loops => waitLoops, wait_sleep => waitSleep);
+  FUNCTION MAKE_SPEC(threadMod IN PLS_INTEGER, batchLimit IN INT DEFAULT 32, rowLimit IN PLS_INTEGER DEFAULT 2147483647, threadCount IN PLS_INTEGER DEFAULT 8, cpuMulti INT DEFAULT 1, waitLoops IN INT DEFAULT 2, waitSleep IN NUMBER DEFAULT 1) RETURN BATCH_SPEC IS
+    qspec BATCH_SPEC := NEW BATCH_SPEC(thread_mod => threadMod, batch_limit => batchLimit, row_limit => rowLimit, thread_count => threadCount,  cpu_multi => cpuMulti, wait_loops => waitLoops, wait_sleep => waitSleep);
   BEGIN
     RETURN qspec;
   END MAKE_SPEC;
@@ -154,6 +154,7 @@ create or replace PACKAGE BODY TQ as
 --      SELECT /*+ parallel(V, 16) */ ROWIDTOCHAR(ROWID), V.*, MYSID() FROM TQSTUBS V WHERE (spec.THREAD_MOD = -1 OR MOD(ORA_HASH(ACCOUNT_ID),spec.THREAD_COUNT) = spec.THREAD_MOD) ORDER BY TQUEUE_ID      
 --    ))) T ORDER BY T.TQUEUE_ID;
     rows PLS_INTEGER := 0;
+    batches PLS_INTEGER := 0;
     stub TQSTUBS_OBJ;
     tqOrderedStubs TQSTUBS_OBJ_ARR := NEW TQSTUBS_OBJ_ARR();
     accountOrderedStubs TQSTUBS_OBJ_ARR;
@@ -184,9 +185,13 @@ create or replace PACKAGE BODY TQ as
       IF(accountOrderedStubs(i).SECURITY_TYPE = 'X') THEN
         IF(batch IS NOT NULL) THEN
           PIPE ROW(batch);
+          batches := batches + 1;
+          if(batches=spec.batch_Limit) THEN RETURN; END IF;
           batch := NULL;
         END IF;
         PIPE ROW(NEW TQBATCH(accountOrderedStubs(i), i));
+        batches := batches + 1;
+        if(batches=spec.batch_Limit) THEN RETURN; END IF;        
         CONTINUE;
       END IF;
       IF(batch IS NULL) THEN        
@@ -196,6 +201,8 @@ create or replace PACKAGE BODY TQ as
           batch.ADDSTUB(accountOrderedStubs(i));
         ELSE
           PIPE ROW(batch);
+          batches := batches + 1;
+          if(batches=spec.batch_Limit) THEN RETURN; END IF;
           batch := NEW TQBATCH(accountOrderedStubs(i), i);
         END IF;      
       END IF;
@@ -203,6 +210,8 @@ create or replace PACKAGE BODY TQ as
     END LOOP;
     IF(batch IS NOT NULL) THEN
       PIPE ROW (batch);
+      batches := batches + 1;
+      if(batches=spec.batch_Limit) THEN RETURN; END IF;      
     END IF;
     EXCEPTION
       WHEN NO_DATA_NEEDED THEN 
