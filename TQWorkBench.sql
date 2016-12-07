@@ -704,4 +704,24 @@ for(t in 0..TCOUNT-1) {
 }
 
 
+DECLARE 
+  a INT_ARR;
+  l_start NUMBER;
+  l_loops NUMBER := 1000;
+  elapsed NUMBER;
+  per NUMBER;
+BEGIN
+  l_start := DBMS_UTILITY.get_time;
+  FOR x IN 1..l_loops LOOP
+    FOR t IN 0..11 LOOP
+      SELECT TQ.GET_ACCOUNT_BUCKET_MODS(t, 12) INTO a FROM DUAL;
+      --DBMS_OUTPUT.PUT_LINE('T: [' || t || ']:' || TQ.TOSTR(a));
+    END LOOP;
+  END LOOP;
+  elapsed := DBMS_UTILITY.get_time - l_start;
+  per := elapsed/l_loops;
+  DBMS_OUTPUT.PUT_LINE('Elapsed: ' || elapsed || ' hsecs. Per Call:' || per || ' hsecs per call');
+END;
+
+
 

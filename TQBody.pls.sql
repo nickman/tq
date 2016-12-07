@@ -1,10 +1,17 @@
 create or replace PACKAGE BODY TQ as
   -- Enablement flag for tcp logging
-  TCPLOG_ENABLED BOOLEAN := FALSE;
+  TCPLOG_ENABLED BOOLEAN := TRUE;
   -- The current session's SID
   SID NUMBER;
   -- The number of cpus available to Oracle
   CPUS CONSTANT PLS_INTEGER := CPUCOUNT();
+  -- The ACCOUNT_ID for threadMod -1 (single thread)
+  SINGLE_THREAD_MODS CONSTANT INT_ARR := GET_ACCOUNT_FULL_MODS();
+  
+  TYPE MOD_CACHE_TYPE IS TABLE OF INT_ARR INDEX BY VARCHAR2(10);
+  
+  modCache MOD_CACHE_TYPE;
+  
   
   -- ==================================================================================
   --  Determines the number of CPUs available to Oracle
@@ -16,6 +23,53 @@ create or replace PACKAGE BODY TQ as
     RETURN cpus;
   END CPUCOUNT;
 
+  FUNCTION GET_ACCOUNT_FULL_MODS RETURN INT_ARR IS
+    range INT_ARR := NEW INT_ARR();
+  BEGIN
+    range.extend(ACCOUNT_BUCKETS);
+    FOR i in 0..ACCOUNT_BUCKETS_MAXIND LOOP
+      range(i+1) := i;
+    END LOOP;
+    RETURN range;
+  END GET_ACCOUNT_FULL_MODS;
+  
+  FUNCTION TOSTR(range IN INT_ARR) RETURN VARCHAR2 IS
+    a VARCHAR2(2000) := '';
+  BEGIN
+    FOR i IN 1..range.COUNT LOOP
+      IF(LENGTH(a) > 0) THEN
+        a := a || ',';
+      END IF;
+      a := a || range(i);
+    END LOOP;
+    RETURN 'RANGE:[' || a || ']';
+  END TOSTR;
+
+  FUNCTION GET_ACCOUNT_BUCKET_MODS(threadMod IN PLS_INTEGER, threadCount IN PLS_INTEGER) RETURN INT_ARR IS
+    key CONSTANT VARCHAR2(10) := '' || threadMod || ':' || threadCount;
+    range INT_ARR := NEW INT_ARR();
+    mods PLS_INTEGER := 1;
+  BEGIN
+    IF(threadMod=-1) THEN
+      RETURN SINGLE_THREAD_MODS;
+    END IF;
+    IF(threadCount < 1) THEN 
+      RAISE_APPLICATION_ERROR(-24000, 'INVALID THREAD COUNT: [' || threadCount || ']. MUST BE gt 0');
+    END IF;
+    IF(threadMod < -1 OR threadMod >= threadCount) THEN
+      RAISE_APPLICATION_ERROR(-24001, 'INVALID THREAD MOD: [' || threadMod || ']. MUST BE gte -1 AND lt ' || threadCount);
+    END IF;
+    if(modCache.exists(key)) THEN RETURN modCache(key); END IF;
+    FOR i in 0..ACCOUNT_BUCKETS_MAXIND LOOP
+      IF(MOD(i, threadCount)=threadMod) THEN
+        range.extend();
+        range(mods) := i;
+        mods := mods + 1;
+      END IF;
+    END LOOP;
+    modCache(key) := range;
+    RETURN range;
+  END GET_ACCOUNT_BUCKET_MODS;
 
 
 
@@ -34,7 +88,7 @@ create or replace PACKAGE BODY TQ as
       TCPLOG_ENABLED := TRUE;
     END IF;
   END SET_TCPLOG_ENABLED;
-   
+  
   FUNCTION IS_TCPLOG_ENABLED RETURN PLS_INTEGER IS
   BEGIN
     IF(TCPLOG_ENABLED) THEN RETURN 1;
@@ -67,7 +121,7 @@ create or replace PACKAGE BODY TQ as
   BEGIN
       LOOP
       FETCH p INTO rec;
-        PIPE ROW(TQSTUBS_OBJ(rec.XROWID,rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.BATCH_ID,rec.BATCH_TS, rec.SID));
+        PIPE ROW(TQSTUBS_OBJ(rec.XROWID,rec.TQROWID,rec.TQUEUE_ID,rec.XID,rec.SECURITY_ID,rec.SECURITY_TYPE,rec.ACCOUNT_ID,rec.ACCOUNT_BUCKET,rec.BATCH_ID,rec.BATCH_TS, rec.SID));
       END LOOP;
       RETURN;
       EXCEPTION
@@ -129,7 +183,9 @@ create or replace PACKAGE BODY TQ as
   BEGIN
     srec := DECODE_SECURITY(securityDisplayName);
     accountId := DECODE_ACCOUNT(accountDisplayName).ACCOUNT_ID;
-    INSERT INTO TQSTUBS VALUES(ROWIDTOCHAR(rowid), tqueueId, CURRENTXID(), srec.SECURITY_ID, srec.SECURITY_TYPE, accountId, batchId, ts);
+    INSERT INTO TQSTUBS 
+    (TQROWID, TQUEUE_ID, XID, SECURITY_ID, SECURITY_TYPE, ACCOUNT_ID, ACCOUNT_BUCKET, BATCH_ID, BATCH_TS)
+    VALUES(ROWIDTOCHAR(rowid), tqueueId, CURRENTXID(), srec.SECURITY_ID, srec.SECURITY_TYPE, accountId, MOD(ORA_HASH(accountId), ACCOUNT_BUCKETS), batchId, ts);
   END TRIGGER_STUB;
   
 
@@ -137,8 +193,8 @@ create or replace PACKAGE BODY TQ as
   -- *******************************************************
   --    Creates a new Query Spec
   -- *******************************************************  
-  FUNCTION MAKE_SPEC(threadMod IN PLS_INTEGER, batchLimit IN INT DEFAULT 32, rowLimit IN PLS_INTEGER DEFAULT 2147483647, threadCount IN PLS_INTEGER DEFAULT 8, cpuMulti INT DEFAULT 1, waitLoops IN INT DEFAULT 2, waitSleep IN NUMBER DEFAULT 1) RETURN BATCH_SPEC IS
-    qspec BATCH_SPEC := NEW BATCH_SPEC(thread_mod => threadMod, batch_limit => batchLimit, row_limit => rowLimit, thread_count => threadCount,  cpu_multi => cpuMulti, wait_loops => waitLoops, wait_sleep => waitSleep);
+  FUNCTION MAKE_SPEC(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 2147483647, threadCount IN PLS_INTEGER DEFAULT 8, cpuMulti INT DEFAULT 1, waitLoops IN INT DEFAULT 2, waitSleep IN NUMBER DEFAULT 1) RETURN BATCH_SPEC IS
+    qspec BATCH_SPEC := NEW BATCH_SPEC(thread_mod => threadMod, row_limit => rowLimit, thread_count => threadCount,  cpu_multi => cpuMulti, wait_loops => waitLoops, wait_sleep => waitSleep);
   BEGIN
     RETURN qspec;
   END MAKE_SPEC;
@@ -149,12 +205,11 @@ create or replace PACKAGE BODY TQ as
   --    Groups an array of TQSTUBS_OBJ into an 
   --    array of TQBATCHes.
   -- *******************************************************
-  FUNCTION GROUP_BATCH_STUBS(spec IN BATCH_SPEC DEFAULT DEFAULT_SPEC) RETURN TQBATCH_ARR PIPELINED IS
+  FUNCTION GROUP_BATCH_STUBS(spec IN BATCH_SPEC) RETURN TQBATCH_ARR PIPELINED IS
 --    CURSOR p is SELECT TQSTUBS_OBJ(T.XROWID, T.TQROWID, T.TQUEUE_ID, T.XID, T.SECURITY_ID, T.SECURITY_TYPE, T.ACCOUNT_ID, T.BATCH_ID, T.BATCH_TS, T.SID) FROM TABLE(FIND_BATCH_STUBS(CURSOR(      
 --      SELECT /*+ parallel(V, 16) */ ROWIDTOCHAR(ROWID), V.*, MYSID() FROM TQSTUBS V WHERE (spec.THREAD_MOD = -1 OR MOD(ORA_HASH(ACCOUNT_ID),spec.THREAD_COUNT) = spec.THREAD_MOD) ORDER BY TQUEUE_ID      
 --    ))) T ORDER BY T.TQUEUE_ID;
     rows PLS_INTEGER := 0;
-    batches PLS_INTEGER := 0;
     stub TQSTUBS_OBJ;
     tqOrderedStubs TQSTUBS_OBJ_ARR := NEW TQSTUBS_OBJ_ARR();
     accountOrderedStubs TQSTUBS_OBJ_ARR;
@@ -162,15 +217,20 @@ create or replace PACKAGE BODY TQ as
     batchId PLS_INTEGER := 1;
     TYPE StubCur IS REF CURSOR;
     p StubCur;    
-    stubsSql VARCHAR2(1000) := 'SELECT TQSTUBS_OBJ(T.XROWID, T.TQROWID, T.TQUEUE_ID, T.XID, T.SECURITY_ID, T.SECURITY_TYPE, T.ACCOUNT_ID, T.BATCH_ID, T.BATCH_TS, T.SID) FROM TABLE(TQ.FIND_BATCH_STUBS(CURSOR(' ||
-      'SELECT /*+ parallel(V, ' || (CPUS * spec.CPU_MULTI) || ') */ ROWIDTOCHAR(ROWID), V.*, TQ.MYSID() FROM TQSTUBS V WHERE (:a = -1 OR MOD(ORA_HASH(ACCOUNT_ID), :b) = :a) ' ||
+--    stubsSql VARCHAR2(1000) := 'SELECT TQSTUBS_OBJ(T.XROWID, T.TQROWID, T.TQUEUE_ID, T.XID, T.SECURITY_ID, T.SECURITY_TYPE, T.ACCOUNT_ID, T.BATCH_ID, T.BATCH_TS, T.SID) FROM TABLE(TQ.FIND_BATCH_STUBS(CURSOR(' ||
+--      'SELECT /*+ parallel(V, ' || (CPUS * spec.CPU_MULTI) || ') */ ROWIDTOCHAR(ROWID), V.*, TQ.MYSID() FROM TQSTUBS V WHERE (:a = -1 OR MOD(ORA_HASH(ACCOUNT_ID), :b) = :a) ' ||
+--      '))) T ORDER BY T.TQUEUE_ID';
+    stubsSql VARCHAR2(1000) := 'SELECT TQSTUBS_OBJ(T.XROWID, T.TQROWID, T.TQUEUE_ID, T.XID, T.SECURITY_ID, T.SECURITY_TYPE, T.ACCOUNT_ID, T.ACCOUNT_BUCKET, T.BATCH_ID, T.BATCH_TS, T.SID) FROM TABLE(TQ.FIND_BATCH_STUBS(CURSOR(' ||
+      'SELECT /*+ parallel(V, ' || (CPUS * spec.CPU_MULTI) || ') */ ROWIDTOCHAR(ROWID), V.*, TQ.MYSID() FROM TQSTUBS V WHERE :a = -1 OR EXISTS ( ' ||
+      'SELECT COLUMN_VALUE MV FROM TABLE(:b) M WHERE M.MV = T.ACCOUNT_BUCKET) ' ||
       '))) T ORDER BY T.TQUEUE_ID';
     
     
   BEGIN    
-    DBMS_OUTPUT.PUT_LINE(spec.tov());
-    LOGGING.tcplog(spec.tov());
-    OPEN p FOR stubsSql USING spec.THREAD_MOD, spec.THREAD_COUNT, spec.THREAD_MOD;
+    --DBMS_OUTPUT.PUT_LINE(spec.tov());
+    --LOGGING.tcplog(spec.tov());
+    --OPEN p FOR stubsSql USING spec.THREAD_MOD, spec.THREAD_COUNT, spec.THREAD_MOD;
+    OPEN p FOR stubsSql USING spec.THREAD_MOD, spec.MODS;
 --    OPEN p;
     LOOP
       tqOrderedStubs.extend();
@@ -185,13 +245,9 @@ create or replace PACKAGE BODY TQ as
       IF(accountOrderedStubs(i).SECURITY_TYPE = 'X') THEN
         IF(batch IS NOT NULL) THEN
           PIPE ROW(batch);
-          batches := batches + 1;
-          if(batches=spec.batch_Limit) THEN RETURN; END IF;
           batch := NULL;
         END IF;
         PIPE ROW(NEW TQBATCH(accountOrderedStubs(i), i));
-        batches := batches + 1;
-        if(batches=spec.batch_Limit) THEN RETURN; END IF;        
         CONTINUE;
       END IF;
       IF(batch IS NULL) THEN        
@@ -201,8 +257,6 @@ create or replace PACKAGE BODY TQ as
           batch.ADDSTUB(accountOrderedStubs(i));
         ELSE
           PIPE ROW(batch);
-          batches := batches + 1;
-          if(batches=spec.batch_Limit) THEN RETURN; END IF;
           batch := NEW TQBATCH(accountOrderedStubs(i), i);
         END IF;      
       END IF;
@@ -210,8 +264,6 @@ create or replace PACKAGE BODY TQ as
     END LOOP;
     IF(batch IS NOT NULL) THEN
       PIPE ROW (batch);
-      batches := batches + 1;
-      if(batches=spec.batch_Limit) THEN RETURN; END IF;      
     END IF;
     EXCEPTION
       WHEN NO_DATA_NEEDED THEN 
@@ -250,7 +302,7 @@ create or replace PACKAGE BODY TQ as
   -- *******************************************************
   FUNCTION QUERY_BATCHES(threadMod IN PLS_INTEGER, rowLimit IN PLS_INTEGER DEFAULT 1024, threadCount IN PLS_INTEGER DEFAULT 16, bucketSize IN PLS_INTEGER DEFAULT 999999 ) RETURN TQSTUBS_OBJ_ARR PIPELINED PARALLEL_ENABLE IS
     CURSOR pipeBatches IS 
-      SELECT /*+ parallel(T, 8) */ TQSTUBS_OBJ(ROWIDTOCHAR(ROWID), ROWIDTOCHAR(TQROWID),TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,BATCH_ID,BATCH_TS, SID)
+      SELECT /*+ parallel(T, 8) */ TQSTUBS_OBJ(ROWIDTOCHAR(ROWID), ROWIDTOCHAR(TQROWID),TQUEUE_ID,XID,SECURITY_ID,SECURITY_TYPE,ACCOUNT_ID,ACCOUNT_BUCKET,BATCH_ID,BATCH_TS, SID)
         FROM TQSTUBS T WHERE MOD(ORA_HASH(ACCOUNT_ID, bucketSize),threadCount) = threadMod ORDER BY t.ACCOUNT_ID, T.TQUEUE_ID;
     tqStub TQSTUBS_OBJ;
     piped PLS_INTEGER := 0;
@@ -554,5 +606,5 @@ create or replace PACKAGE BODY TQ as
   END CURRENTXID;
 
   BEGIN
-    SELECT SYS_CONTEXT('USERENV', 'SID') INTO sid FROM DUAL;
+    SELECT SYS_CONTEXT('USERENV', 'SID') INTO sid FROM DUAL;    
 end tq;
