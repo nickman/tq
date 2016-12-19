@@ -723,5 +723,17 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE('Elapsed: ' || elapsed || ' hsecs. Per Call:' || per || ' hsecs per call');
 END;
 
+declare
+  stub TQBATCH;
+  trades TQUEUE_OBJ_ARR;
+begin
+  select value(T) into stub FROM TABLE(TQ.GROUP_BATCH_STUBS(TQ.MAKE_SPEC(1,4,10,10))) T ORDER BY T.FIRST_T;
+  DBMS_OUTPUT.PUT_LINE('BATCH [' || stub.ROWIDS.COUNT || ']:' || stub.TOV());
+  trades := tq.GET_TRADE_BATCH(stub.TQROWIDS);
+  DBMS_OUTPUT.PUT_LINE('ACQUIRED AND LOCKED [' || trades.COUNT || '] TRADES');
+  for i in 1..trades.count loop
+    DBMS_OUTPUT.PUT_LINE(trades(i).XROWID);
+  end loop;
+end;
 
 

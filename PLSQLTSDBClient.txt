@@ -48,6 +48,23 @@ VALUE
 TOJSON
 TOPUT
 
+
+
+CREATE OR REPLACE FUNCTION DATEFROMMS(ts IN NUMBER) RETURN VARCHAR2
+AS LANGUAGE JAVA
+NAME 'TS.dateFromMs(long) return java.lang.String';
+
+CREATE OR REPLACE FUNCTION MS RETURN NUMBER
+AS LANGUAGE JAVA
+NAME 'TS.msSinceEpoch() return long';
+
+
+select DATEFROMMS(1481896625071) from dual;
+
+select DATEFROMMS(MS()) from DUAL
+UNION ALL
+select DATEFROMMS(TRACER.EPOCHMS()) from DUAL;
+
 create or replace PACKAGE TSDB_UTIL AS 
 
   -- Generic Ref Cursor
@@ -118,6 +135,18 @@ create or replace PACKAGE TSDB_UTIL AS
   --  Returns the host name of the connecting client this session was initiated by
   --===================================================================================================================
   FUNCTION CLIENT_HOST RETURN VARCHAR2;
+  
+  --===================================================================================================================
+  --  Cleans the passed string to remove whitespace, lowercase and illegal punctuation
+  --===================================================================================================================
+  FUNCTION CLEAN(str IN VARCHAR2) RETURN VARCHAR2;
+  
+  --===================================================================================================================
+  --  Cleans the passed string to remove whitespace, lowercase and illegal punctuation
+  --===================================================================================================================
+  PROCEDURE CLEAN(str IN OUT NOCOPY VARCHAR2);
+  
+  
 END TSDB_UTIL;
 
 create or replace PACKAGE BODY TSDB_UTIL AS
@@ -236,6 +265,31 @@ create or replace PACKAGE BODY TSDB_UTIL AS
   BEGIN
     RETURN clientHost;
   END CLIENT_HOST;
+  
+  --===================================================================================================================
+  --  Cleans the passed string to remove whitespace, lowercase and illegal punctuation
+  --===================================================================================================================
+  FUNCTION CLEAN(str IN VARCHAR2) RETURN VARCHAR2 IS
+    cs VARCHAR2(360);
+  BEGIN
+    IF(str IS NULL) THEN 
+      RAISE_APPLICATION_ERROR(-20101, 'The passed varchar was null');
+    END IF;
+    cs := REPLACE(RTRIM(LTRIM(LOWER(str))), ' ', '_');
+    IF(cs IS NULL) THEN 
+      RAISE_APPLICATION_ERROR(-20101, 'The passed varchar was empty');
+    END IF;    
+    RETURN cs;
+  END CLEAN;
+  
+  --===================================================================================================================
+  --  Cleans the passed string to remove whitespace, lowercase and illegal punctuation
+  --===================================================================================================================
+  PROCEDURE CLEAN(str IN OUT NOCOPY VARCHAR2) IS
+  BEGIN
+    str := CLEAN(str);
+  END CLEAN;
+  
 
   --===================================================================================================================
   --  Initializes the session info for this session
@@ -251,6 +305,78 @@ create or replace PACKAGE BODY TSDB_UTIL AS
 END TSDB_UTIL;
 
 
+
+create or replace type tagpair force as object ( 
+  K VARCHAR(60),
+  V VARCHAR(60),
+  MEMBER FUNCTION JSON RETURN VARCHAR2,
+  MEMBER FUNCTION PUT RETURN VARCHAR2,
+  CONSTRUCTOR FUNCTION TAGPAIR(K IN VARCHAR, V IN VARCHAR) RETURN SELF AS RESULT,
+  CONSTRUCTOR FUNCTION TAGPAIR RETURN SELF AS RESULT,
+  ORDER MEMBER FUNCTION MATCH(tp IN TAGPAIR) RETURN INTEGER
+);
+
+create or replace type body tagpair as
+
+  member function json return varchar2 as
+    begin    
+      return '"' || K || '":"' || V || '"';
+    end json;
+    
+  MEMBER FUNCTION PUT RETURN VARCHAR2 IS
+  BEGIN
+    RETURN K || '=' || V;
+  END PUT;
+  
+  constructor function tagpair(k in varchar, v in varchar) return self as result as
+    begin
+      IF(k IS NULL OR RTRIM(LTRIM(k)) IS NULL) THEN
+        RAISE_APPLICATION_ERROR(-24000, 'The tag key was null or empty');
+      END IF;
+      IF(v IS NULL OR RTRIM(LTRIM(v)) IS NULL) THEN
+        RAISE_APPLICATION_ERROR(-24000, 'The tag value was null or empty');
+      END IF;
+      SELF.k := TSDB_UTIL.CLEAN(k); 
+      SELF.v := TSDB_UTIL.CLEAN(v);
+      return;
+    end tagpair;
+  
+  CONSTRUCTOR FUNCTION TAGPAIR RETURN SELF AS RESULT AS
+  BEGIN
+    RAISE_APPLICATION_ERROR(-20101, 'Must provide key and value for tagpair. Please use constructor function tagpair(k in varchar, v in varchar)');
+  END;
+
+  ORDER MEMBER FUNCTION MATCH(tp IN TAGPAIR) RETURN INTEGER IS
+    me TAGPAIR := SELF;
+  BEGIN
+    IF(tp IS NULL) THEN RETURN NULL; END IF;
+    --
+    IF(me.K = 'host') THEN
+      IF(tp.K = 'host') THEN
+        RETURN 0;
+      ELSE
+        RETURN -1;
+      END IF;
+    ELSIF(me.K = 'app') THEN
+      IF(tp.K = 'app') THEN
+        RETURN 0;
+      ELSE
+        RETURN -1;
+      END IF;
+    ELSE
+      IF(tp.K = 'host' OR tp.K = 'app') THEN
+        RETURN 1;
+      ELSIF(me.K = tp.K) THEN
+        RETURN 0;
+      ELSIF(me.K < tp.K) THEN
+        RETURN -1;
+      ELSE
+        RETURN 0;
+      END IF;    
+    END IF;
+  END;
+
+end;
 
 create or replace TYPE METRIC AS OBJECT (
   -- The metric name
@@ -487,7 +613,7 @@ create or replace TYPE BODY METRIC AS
       RAISE_APPLICATION_ERROR(-20101, 'Metric name was null');
     END IF;
     
-    METRICNAME := RTRIM(LTRIM(LOWER(name)));
+    METRICNAME := TSDB_UTIL.CLEAN(name);
     IF(METRICNAME IS NULL) THEN
       RAISE_APPLICATION_ERROR(-20101, 'Metric name was null');
     END IF;
@@ -499,8 +625,7 @@ create or replace TYPE BODY METRIC AS
 END;
 
 
-CREATE OR REPLACE 
-PACKAGE TSDB_TRACER AS 
+create or replace PACKAGE TSDB_TRACER AS 
 
   TYPE METRIC_ARR IS TABLE OF METRIC INDEX BY VARCHAR2(360);
   
@@ -512,8 +637,7 @@ PACKAGE TSDB_TRACER AS
 
 END TSDB_TRACER;
 
-CREATE OR REPLACE
-PACKAGE BODY TSDB_TRACER AS
+create or replace PACKAGE BODY TSDB_TRACER AS
 
 --select N.NAME, TSDB_TRACER.DECODE_CLASS(N.CLASS) CLASSNAME, M.VALUE from v$mystat M, v$statname N
 --WHERE M.STATISTIC# = N.STATISTIC#
@@ -538,6 +662,4 @@ PACKAGE BODY TSDB_TRACER AS
 
     
 END TSDB_TRACER;
-
-
 

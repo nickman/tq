@@ -68,140 +68,140 @@ pc = { name ->
 //======================================
 // FIXME:   ROWID for OBJECTs must be VARCHAR2(18)
 getTabMeta = { tableName ->
-	def meta = metaCache.get(tableName);
-	if(meta!=null) return meta;
-	meta = new LinkedHashMap();
-	sql.eachRow(TABLE_META_SQL, [tableName], {
-		colName = it.COLUMN_NAME;
-		colAttrs = [:];
-		colAttrs.tname = it.TABLE_NAME;
-		colAttrs.cname = it.COLUMN_NAME;
-		colAttrs.pname = pc(it.COLUMN_NAME);
-		colAttrs.lcpname = pc(it.COLUMN_NAME).toLowerCase();
-		colAttrs.dtype = it.DATA_TYPE;
-		colAttrs.length = it.DATA_LENGTH.intValue();
-		colAttrs.nul = "Y".equals(it.NULLABLE);
-		colAttrs.nulspec = colAttrs.nul ? "" : "NOT NULL";
-		colAttrs.id = it.COLUMN_ID;
-		def lenSpec = NO_LEN_TYPES.contains(it.DATA_TYPE) ? "" : "(${it.DATA_LENGTH})";
-		colAttrs.ddl = "${it.DATA_TYPE}$lenSpec";
-		meta.put(colName, colAttrs);
-	});	
-	metaCache.put(tableName, meta);
-	return meta;
+    def meta = metaCache.get(tableName);
+    if(meta!=null) return meta;
+    meta = new LinkedHashMap();
+    sql.eachRow(TABLE_META_SQL, [tableName], {
+        colName = it.COLUMN_NAME;
+        colAttrs = [:];
+        colAttrs.tname = it.TABLE_NAME;
+        colAttrs.cname = it.COLUMN_NAME;
+        colAttrs.pname = pc(it.COLUMN_NAME);
+        colAttrs.lcpname = pc(it.COLUMN_NAME).toLowerCase();
+        colAttrs.dtype = it.DATA_TYPE;
+        colAttrs.length = it.DATA_LENGTH.intValue();
+        colAttrs.nul = "Y".equals(it.NULLABLE);
+        colAttrs.nulspec = colAttrs.nul ? "" : "NOT NULL";
+        colAttrs.id = it.COLUMN_ID;
+        def lenSpec = NO_LEN_TYPES.contains(it.DATA_TYPE) ? "" : "(${it.DATA_LENGTH})";
+        colAttrs.ddl = "${it.DATA_TYPE}$lenSpec";
+        meta.put(colName, colAttrs);
+    });    
+    metaCache.put(tableName, meta);
+    return meta;
 }
 
 
 // FIXME: Add TOV for ARR types
 genObject = { rowid, arr, record, tableName ->
-	meta = getTabMeta(tableName);
-	b = new StringBuilder();
-	if(record) {
-		b.append("TYPE ${tableName}_REC IS RECORD (");		
-	} else {
-		b.append("CREATE OR REPLACE TYPE ${tableName}_OBJ FORCE AS OBJECT (");		
-	}
-	if(rowid) {
-		b.append("\n\tXROWID VARCHAR2(18),");
-	}
-	meta.values().each() { m ->
-		if(record) {
-			// TQUEUEO.TQUEUE_ID%TYPE,
-			b.append("\n\t${m.cname} ${tableName}.${m.cname}%TYPE,");
-		} else {
-			b.append("\n\t${m.cname} ${m.ddl},");
-		}		
-	}	
-	if(!record) {
-		b.append("\nMEMBER FUNCTION TOV RETURN VARCHAR2");
-	} else {
-		b.deleteCharAt(b.length()-1);
-	}
-	b.append("\n);");
-	int trimLen = " || ',' || ".length();
-	if(!record) {
-		b.append("\n/");
-		b.append("\nCREATE OR REPLACE TYPE BODY ${tableName}_OBJ AS\nMEMBER FUNCTION TOV RETURN VARCHAR2 AS\nBEGIN\nRETURN ");
-		if(rowid) {
-			b.append("SELF.XROWID || ',' || ");
-		}
-		meta.values().each() { m ->
-			b.append("SELF.${m.cname} || ',' || ");
-		}
-		for(i in 1..trimLen) b.deleteCharAt(b.length()-1);
-		b.append(";\nEND TOV;\nEND;\n/\n")
-	}
-	if(arr) {
-		if(record) {
-			b.append("\nTYPE ${tableName}_REC_ARR IS TABLE OF ${tableName}_REC;");			
-			b.append("\nTYPE ${tableName}_REC_CUR IS REF CURSOR RETURN ${tableName}_REC;");
-		} else {
-			b.append("\nCREATE OR REPLACE TYPE ${tableName}_OBJ_ARR FORCE AS TABLE OF ${tableName}_OBJ;\n/")
-		}
-		
-	}
-	return b.toString();
+    meta = getTabMeta(tableName);
+    b = new StringBuilder();
+    if(record) {
+        b.append("TYPE ${tableName}_REC IS RECORD (");        
+    } else {
+        b.append("CREATE OR REPLACE TYPE ${tableName}_OBJ FORCE AS OBJECT (");        
+    }
+    if(rowid) {
+        b.append("\n\tXROWID VARCHAR2(18),");
+    }
+    meta.values().each() { m ->
+        if(record) {
+            // TQUEUEO.TQUEUE_ID%TYPE,
+            b.append("\n\t${m.cname} ${tableName}.${m.cname}%TYPE,");
+        } else {
+            b.append("\n\t${m.cname} ${m.ddl},");
+        }        
+    }    
+    if(!record) {
+        b.append("\nMEMBER FUNCTION TOV RETURN VARCHAR2");
+    } else {
+        b.deleteCharAt(b.length()-1);
+    }
+    b.append("\n);");
+    int trimLen = " || ',' || ".length();
+    if(!record) {
+        b.append("\n/");
+        b.append("\nCREATE OR REPLACE TYPE BODY ${tableName}_OBJ AS\nMEMBER FUNCTION TOV RETURN VARCHAR2 AS\nBEGIN\nRETURN ");
+        if(rowid) {
+            b.append("SELF.XROWID || ',' || ");
+        }
+        meta.values().each() { m ->
+            b.append("SELF.${m.cname} || ',' || ");
+        }
+        for(i in 1..trimLen) b.deleteCharAt(b.length()-1);
+        b.append(";\nEND TOV;\nEND;\n/\n")
+    }
+    if(arr) {
+        if(record) {
+            b.append("\nTYPE ${tableName}_REC_ARR IS TABLE OF ${tableName}_REC;");            
+            b.append("\nTYPE ${tableName}_REC_CUR IS REF CURSOR RETURN ${tableName}_REC;");
+        } else {
+            b.append("\nCREATE OR REPLACE TYPE ${tableName}_OBJ_ARR FORCE AS TABLE OF ${tableName}_OBJ;\n/")
+        }
+        
+    }
+    return b.toString();
 }
 
 
 genPipeRecsIntoObjects = { rowid, tableName ->
-	meta = getTabMeta(tableName);
-	b = new StringBuilder("FUNCTION ${tableName}_RECS_TO_OBJS(p IN ${tableName}_REC_CUR) RETURN ${tableName}_OBJ_ARR PIPELINED PARALLEL_ENABLE IS ");
-	b.append("\n\trec ${tableName}_REC;")
-	b.append("\nBEGIN\n\t\tLOOP\n\t\t\tFETCH p into rec;\n\t\t\tEXIT WHEN p%NOTFOUND;");
-	b.append("\n\t\t\tPIPE ROW(${tableName}_OBJ(");
-	b.append("rec.XROWID,")
-	meta.values().each() { m ->
-		b.append("rec.${m.cname},")
-	}
-	b.deleteCharAt(b.length()-1);
-	b.append("));\n\t\tEND LOOP;\n\t\tRETURN;\n\t\tEXCEPTION\n\t\t\tWHEN NO_DATA_NEEDED THEN RAISE;\nEND ${tableName}_RECS_TO_OBJS;");
-	return b.toString();
+    meta = getTabMeta(tableName);
+    b = new StringBuilder("FUNCTION ${tableName}_RECS_TO_OBJS(p IN ${tableName}_REC_CUR) RETURN ${tableName}_OBJ_ARR PIPELINED PARALLEL_ENABLE IS ");
+    b.append("\n\trec ${tableName}_REC;")
+    b.append("\nBEGIN\n\t\tLOOP\n\t\t\tFETCH p into rec;\n\t\t\tEXIT WHEN p%NOTFOUND;");
+    b.append("\n\t\t\tPIPE ROW(${tableName}_OBJ(");
+    b.append("rec.XROWID,")
+    meta.values().each() { m ->
+        b.append("rec.${m.cname},")
+    }
+    b.deleteCharAt(b.length()-1);
+    b.append("));\n\t\tEND LOOP;\n\t\tRETURN;\n\t\tEXCEPTION\n\t\t\tWHEN NO_DATA_NEEDED THEN RAISE;\nEND ${tableName}_RECS_TO_OBJS;");
+    return b.toString();
 }
 
 genTableParams = { rowid, xrowid, inout, prefix, tableName ->
-	meta = getTabMeta(tableName);
-	b = new StringBuilder("(");
-	if(rowid) {
-		if(xrowid) {
-			b.append(prefix).append("XROWID ").append(inout).append(" VARCHAR2, ");
-		} else {
-			b.append(prefix).append("${pc('rowid')} ").append(inout).append(" ROWID, ");
-		}
-	}
-	meta.values().each() { m ->
-		b.append(prefix).append(m.pname).append(" ").append(inout).append(" ").append(m.dtype).append(", ");
-	}
-	b.deleteCharAt(b.length()-1);b.deleteCharAt(b.length()-1);
-	return b.append(")").toString();
+    meta = getTabMeta(tableName);
+    b = new StringBuilder("(");
+    if(rowid) {
+        if(xrowid) {
+            b.append(prefix).append("XROWID ").append(inout).append(" VARCHAR2, ");
+        } else {
+            b.append(prefix).append("${pc('rowid')} ").append(inout).append(" ROWID, ");
+        }
+    }
+    meta.values().each() { m ->
+        b.append(prefix).append(m.pname).append(" ").append(inout).append(" ").append(m.dtype).append(", ");
+    }
+    b.deleteCharAt(b.length()-1);b.deleteCharAt(b.length()-1);
+    return b.append(")").toString();
 }
 
 genTableSelect = { rowid, xrowid, prefix, tableName ->
-	meta = getTabMeta(tableName);
-	b = new StringBuilder();
-	if(rowid) {
-		if(xrowid) {
-			b.append("ROWIDTOCHAR(").append(prefix).append("ROWID),");
-		} else {
-			b.append(prefix).append("ROWID,");
-		}
-	}
-	meta.values().each() { m ->
-		b.append(prefix).append(m.cname).append(",");
-	}
-	b.deleteCharAt(b.length()-1);
-	return b.toString();
+    meta = getTabMeta(tableName);
+    b = new StringBuilder();
+    if(rowid) {
+        if(xrowid) {
+            b.append("ROWIDTOCHAR(").append(prefix).append("ROWID),");
+        } else {
+            b.append(prefix).append("ROWID,");
+        }
+    }
+    meta.values().each() { m ->
+        b.append(prefix).append(m.cname).append(",");
+    }
+    b.deleteCharAt(b.length()-1);
+    return b.toString();
 }
 
 genObjToTabUpdate = { prefix, tableName ->
-	meta = getTabMeta(tableName);
-	b = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
-	meta.values().each() { m ->
-		b.append("\n").append(m.cname).append("=").append(prefix).append(m.cname).append(",");
-	}
-	b.deleteCharAt(b.length()-1);
-	b.append("\nWHERE ROWID = CHARTOROWID(").append(prefix).append("XROWID)");
-	return b.toString();
+    meta = getTabMeta(tableName);
+    b = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+    meta.values().each() { m ->
+        b.append("\n").append(m.cname).append("=").append(prefix).append(m.cname).append(",");
+    }
+    b.deleteCharAt(b.length()-1);
+    b.append("\nWHERE ROWID = CHARTOROWID(").append(prefix).append("XROWID)");
+    return b.toString();
 }
 
 
@@ -232,5 +232,8 @@ println genObject(true, true, false, "SECURITY");
 
 //println genTableParams(true, false, "IN", "", "TQSTUBS");
 //println genTableSelect(true, false, "rec.", "TQUEUE");
-println genObjToTabUpdate("trades(i).", "TQUEUE");
+//println genObjToTabUpdate("trades(i).", "TQUEUE");
+
+
+
 

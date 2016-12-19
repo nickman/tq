@@ -87,12 +87,12 @@ for(q in 0..1000) {
 	       int rowCount = 0;
 	       try {
 	       		//ps = connections[i].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(?, ?, ?)) T ORDER BY T.FIRST_T");
-	       		ps = connections[x].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(TQ.MAKE_SPEC(?, ?, ?, ?))) T ORDER BY T.FIRST_T"); // 1, 1024, 16
+	       		ps = connections[x].prepareStatement("SELECT VALUE(T).TOV() B FROM TABLE(TQ.GROUP_BATCH_STUBS(BATCH_SPEC(?, ?, ?, ?))) T ORDER BY T.FIRST_T"); // 1, 1024, 16
 	       		
 	       		ps.setInt(1, x);
-	       		ps.setInt(2, ROW_LIMIT);
-	       		ps.setInt(3, THREADS);
-	       		ps.setInt(4, CPU_MULTI);
+	       		ps.setInt(2, THREADS);
+	       		ps.setInt(3, BATCH_LIMIT);
+	       		ps.setInt(4, ROW_LIMIT);
 		       	final long start = System.currentTimeMillis();
 	       		rset = ps.executeQuery();
 	       		rset.setFetchSize(100);
